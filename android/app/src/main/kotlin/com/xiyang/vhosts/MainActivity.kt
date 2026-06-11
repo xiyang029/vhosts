@@ -1,15 +1,10 @@
 package com.xiyang.vhosts
 
-import android.Manifest
 import android.app.Activity
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
 import android.net.VpnService
@@ -25,10 +20,7 @@ class MainActivity : FlutterFragmentActivity() {
     private val channelName = "vhosts/vpn"
     private val stateEventsChannelName = "vhosts/vpn_state_events"
     private val installerChannelName = "vhosts/installer"
-    private val downloadNotificationChannelId = "app_update_download"
-    private val notificationPermissionRequestCode = 1002
     private var pendingPermissionResult: MethodChannel.Result? = null
-    private var notificationPermissionRequested = false
     private var vpnStateEventSink: EventChannel.EventSink? = null
     private var vpnStateReceiver: BroadcastReceiver? = null
     private lateinit var vpnPermissionLauncher: ActivityResultLauncher<Intent>
@@ -46,7 +38,6 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        ensureDownloadNotificationChannel()
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName).setMethodCallHandler { call, result ->
             when (call.method) {
@@ -130,21 +121,6 @@ class MainActivity : FlutterFragmentActivity() {
                 "openInstallPermissionSettings" -> {
                     openInstallPermissionSettings()
                     result.success(null)
-                }
-                "showDownloadNotification" -> {
-                    try {
-                        showDownloadNotification(
-                            id = call.argument<Int>("id") ?: 1001,
-                            title = call.argument<String>("title") ?: "应用更新",
-                            content = call.argument<String>("content") ?: "",
-                            progress = call.argument<Int>("progress"),
-                            completed = call.argument<Boolean>("completed") ?: false,
-                            failed = call.argument<Boolean>("failed") ?: false,
-                        )
-                        result.success(true)
-                    } catch (error: Exception) {
-                        result.error("show_notification_failed", error.message, null)
-                    }
                 }
                 else -> result.notImplemented()
             }
@@ -274,71 +250,6 @@ class MainActivity : FlutterFragmentActivity() {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         startActivity(intent)
-    }
-
-    private fun ensureDownloadNotificationChannel() {
-        val manager = getSystemService(NotificationManager::class.java)
-        if (manager.getNotificationChannel(downloadNotificationChannelId) != null) {
-            return
-        }
-
-        val channel = NotificationChannel(
-            downloadNotificationChannelId,
-            "应用更新下载",
-            NotificationManager.IMPORTANCE_LOW,
-        ).apply {
-            description = "显示应用更新包下载进度"
-        }
-        manager.createNotificationChannel(channel)
-    }
-
-    private fun showDownloadNotification(
-        id: Int,
-        title: String,
-        content: String,
-        progress: Int?,
-        completed: Boolean,
-        failed: Boolean,
-    ) {
-        if (!canPostNotifications()) {
-            return
-        }
-
-        val statusIcon = if (completed) {
-            android.R.drawable.stat_sys_download_done
-        } else {
-            android.R.drawable.stat_sys_download
-        }
-        val notification = Notification.Builder(this, downloadNotificationChannelId)
-            .setSmallIcon(statusIcon)
-            .setContentTitle(title)
-            .setContentText(content)
-            .setOnlyAlertOnce(true)
-            .setOngoing(!completed && !failed)
-            .setAutoCancel(completed || failed)
-            .apply {
-                if (progress != null) {
-                    setProgress(100, progress.coerceIn(0, 100), false)
-                } else if (!completed && !failed) {
-                    setProgress(0, 0, true)
-                }
-            }
-            .build()
-
-        getSystemService(NotificationManager::class.java).notify(id, notification)
-    }
-
-    private fun canPostNotifications(): Boolean {
-        val granted = checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
-            PackageManager.PERMISSION_GRANTED
-        if (!granted && !notificationPermissionRequested) {
-            notificationPermissionRequested = true
-            requestPermissions(
-                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-                notificationPermissionRequestCode,
-            )
-        }
-        return granted
     }
 
     private fun loadAppState(): String? {

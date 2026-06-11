@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/widgets.dart';
@@ -22,11 +21,12 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage>
     with WidgetsBindingObserver {
   final AppUpdateService _updateService = AppUpdateService();
-  static const int _downloadNotificationId = 1001;
   bool _checkingUpdate = false;
   String? _pendingInstallApkPath;
   bool _waitingInstallPermission = false;
-  int _lastNotifiedProgress = -1;
+  final ValueNotifier<_DownloadProgress> _downloadProgress = ValueNotifier(
+    const _DownloadProgress.initial(),
+  );
 
   @override
   void initState() {
@@ -37,6 +37,7 @@ class _SettingsPageState extends State<SettingsPage>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _downloadProgress.dispose();
     super.dispose();
   }
 
@@ -150,30 +151,11 @@ class _SettingsPageState extends State<SettingsPage>
   }
 
   Future<void> _downloadAndInstallRelease(AppReleaseInfo release) async {
-    _lastNotifiedProgress = -1;
-    await _showDownloadNotification(
-      title: '正在下载更新',
-      content: '准备下载 ${release.version}',
-      progress: 0,
-    );
-
     try {
       final cachedFile = await _updateService.findCachedReleaseApk(release);
-      final file =
-          cachedFile ?? await _downloadReleaseWithNotification(release);
-      await _showDownloadNotification(
-        title: '下载完成',
-        content: cachedFile == null ? '正在打开安装包' : '已找到缓存安装包，正在打开安装包',
-        progress: 100,
-        completed: true,
-      );
+      final file = cachedFile ?? await _downloadReleaseWithDialog(release);
       await _openDownloadedApk(file.path);
     } catch (error) {
-      await _showDownloadNotification(
-        title: '下载失败',
-        content: error.toString(),
-        failed: true,
-      );
       if (!mounted) {
         return;
       }
@@ -183,54 +165,36 @@ class _SettingsPageState extends State<SettingsPage>
     }
   }
 
-  Future<void> _showDownloadNotification({
-    required String title,
-    required String content,
-    int? progress,
-    bool completed = false,
-    bool failed = false,
-  }) {
-    return AppInstallerPlatformService.showDownloadNotification(
-      id: _downloadNotificationId,
-      title: title,
-      content: content,
-      progress: progress,
-      completed: completed,
-      failed: failed,
+  Future<File> _downloadReleaseWithDialog(AppReleaseInfo release) async {
+    _downloadProgress.value = const _DownloadProgress.initial();
+    final dialogFuture = showShadDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => _UpdateDownloadDialog(progress: _downloadProgress),
     );
-  }
 
-  Future<File> _downloadReleaseWithNotification(AppReleaseInfo release) {
-    return _updateService.downloadReleaseApk(
-      release,
-      onProgress: (receivedBytes, totalBytes) {
-        if (totalBytes != null && totalBytes > 0) {
-          final progress = (receivedBytes / totalBytes * 100)
-              .clamp(0, 100)
-              .round();
-          if (progress == _lastNotifiedProgress) {
-            return;
-          }
-          _lastNotifiedProgress = progress;
-          unawaited(
-            _showDownloadNotification(
-              title: '正在下载更新',
-              content: '$progress%',
-              progress: progress,
-            ),
+    try {
+      final file = await _updateService.downloadReleaseApk(
+        release,
+        onProgress: (receivedBytes, totalBytes) {
+          _downloadProgress.value = _DownloadProgress(
+            receivedBytes: receivedBytes,
+            totalBytes: totalBytes ?? release.expectedSize,
           );
-          return;
-        }
-
-        final downloadedMb = receivedBytes / 1024 / 1024;
-        unawaited(
-          _showDownloadNotification(
-            title: '正在下载更新',
-            content: '已下载 ${downloadedMb.toStringAsFixed(1)} MB',
-          ),
-        );
-      },
-    );
+        },
+      );
+      if (mounted && Navigator.of(context, rootNavigator: true).canPop()) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+      await dialogFuture;
+      return file;
+    } catch (_) {
+      if (mounted && Navigator.of(context, rootNavigator: true).canPop()) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+      await dialogFuture.catchError((_) {});
+      rethrow;
+    }
   }
 
   Future<void> _resumePendingInstallIfPossible() async {
@@ -318,6 +282,69 @@ class _SettingsPageState extends State<SettingsPage>
         .where((part) => part.isNotEmpty)
         .map((part) => int.tryParse(part) ?? 0)
         .toList();
+  }
+}
+
+class _UpdateDownloadDialog extends StatelessWidget {
+  const _UpdateDownloadDialog({required this.progress});
+
+  final ValueNotifier<_DownloadProgress> progress;
+
+  @override
+  Widget build(BuildContext context) {
+    return ShadDialog(
+      title: const Text('正在下载更新'),
+      description: ValueListenableBuilder<_DownloadProgress>(
+        valueListenable: progress,
+        builder: (context, value, _) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(value.label),
+              const SizedBox(height: 12),
+              ShadProgress(value: value.fraction),
+              const SizedBox(height: 8),
+              Text(value.detail),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _DownloadProgress {
+  const _DownloadProgress({
+    required this.receivedBytes,
+    required this.totalBytes,
+  });
+
+  const _DownloadProgress.initial() : this(receivedBytes: 0, totalBytes: 0);
+
+  final int receivedBytes;
+  final int totalBytes;
+
+  double get fraction {
+    if (totalBytes <= 0) {
+      return 0;
+    }
+    return (receivedBytes / totalBytes).clamp(0, 1).toDouble();
+  }
+
+  String get label => '已下载 ${(fraction * 100).toStringAsFixed(0)}%';
+
+  String get detail {
+    final downloaded = _formatBytes(receivedBytes);
+    final total = totalBytes > 0 ? _formatBytes(totalBytes) : '--';
+    return '$downloaded / $total';
+  }
+
+  static String _formatBytes(int bytes) {
+    if (bytes < 1024 * 1024) {
+      return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    }
+    return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
   }
 }
 
