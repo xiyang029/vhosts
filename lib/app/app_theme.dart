@@ -1,4 +1,6 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 
 const vhostsAccent = Color(0xFFFB7299);
@@ -18,6 +20,47 @@ const vhostsVpnUnauthorized = vhostsWarning;
 const vhostsAliyunDns = Color(0xFF0A84FF);
 const vhostsGoogleDns = Color(0xFF155EEF);
 const vhostsCloudflareDns = Color(0xFF7A5AF8);
+
+class _VhostsToastPlatformService {
+  static const MethodChannel _channel = MethodChannel('vhosts/toast');
+
+  static bool get _supportedPlatform =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+  static Future<void> showToast(String message, {bool long = false}) async {
+    if (!_supportedPlatform) {
+      return;
+    }
+
+    try {
+      await _channel.invokeMethod<void>('showToast', <String, Object?>{
+        'message': message,
+        'long': long,
+      });
+    } on PlatformException {
+      return;
+    }
+  }
+}
+
+void showVhostsToast(
+  BuildContext context,
+  String message, {
+  bool long = false,
+}) {
+  _VhostsToastPlatformService.showToast(message, long: long);
+
+  if (_VhostsToastPlatformService._supportedPlatform || !context.mounted) {
+    return;
+  }
+
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text(message),
+      duration: long ? const Duration(seconds: 4) : const Duration(seconds: 2),
+    ),
+  );
+}
 
 ThemeData buildVhostsMaterialTheme(ThemeData baseTheme) {
   return baseTheme.copyWith(
@@ -72,9 +115,6 @@ ShadThemeData buildVhostsShadTheme() {
     sheetTheme: const ShadSheetTheme(
       useSafeArea: false,
       radius: BorderRadius.vertical(top: Radius.circular(16)),
-    ),
-    primaryToastTheme: const ShadToastTheme(
-      showCloseIconOnlyWhenHovered: false,
     ),
   );
 }

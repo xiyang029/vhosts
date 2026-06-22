@@ -52,7 +52,6 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
-            versionNameSuffix = "-debug"
             manifestPlaceholders["appLabel"] = "vhosts debug"
         }
 

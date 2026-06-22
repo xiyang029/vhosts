@@ -47,26 +47,17 @@ class _DnsPageState extends State<DnsPage> {
                     Expanded(
                       child: ShadButton(
                         onPressed: () async {
-                          final toaster = ShadToaster.of(context);
-                          toaster.hide(animate: false);
-                          toaster.show(
-                            const ShadToast(description: Text('正在测试连接')),
-                          );
                           final elapsedMs = await app.testDnsProfile(
                             activeProfile.id,
                           );
                           if (!context.mounted) {
                             return;
                           }
-                          toaster.hide(animate: false);
-                          toaster.show(
-                            ShadToast(
-                              description: Text(
-                                elapsedMs == null
-                                    ? '${activeProfile.name} 测试失败'
-                                    : '${activeProfile.name} 测试完成，$elapsedMs ms',
-                              ),
-                            ),
+                          showVhostsToast(
+                            context,
+                            elapsedMs == null
+                                ? '${activeProfile.name} 测试失败'
+                                : '${activeProfile.name} 测试完成，$elapsedMs ms',
                           );
                         },
                         leading: const Icon(LucideIcons.bolt),
@@ -218,7 +209,6 @@ class _DnsPageState extends State<DnsPage> {
 
   Future<void> _confirmDeleteProfile(DnsProfile profile) async {
     final app = AppScope.of(context);
-    final toaster = ShadToaster.of(context);
     final confirmed =
         await showShadDialog<bool>(
           context: context,
@@ -244,10 +234,10 @@ class _DnsPageState extends State<DnsPage> {
     }
 
     app.deleteDnsProfile(profile.id);
-    if (!context.mounted) {
+    if (!mounted) {
       return;
     }
-    toaster.show(ShadToast(description: Text('已删除 ${profile.name}')));
+    showVhostsToast(context, '已删除 ${profile.name}');
   }
 }
 
@@ -629,15 +619,11 @@ class _ProfileEditorSheetState extends State<_ProfileEditorSheet> {
     final dotHostname = _dotController.text.trim();
 
     if (name.isEmpty) {
-      ShadToaster.of(
-        context,
-      ).show(const ShadToast(description: Text('请先填写配置名称')));
+      showVhostsToast(context, '请先填写配置名称');
       return;
     }
     if (name.length > 32) {
-      ShadToaster.of(
-        context,
-      ).show(const ShadToast(description: Text('配置名称请控制在 32 个字符以内')));
+      showVhostsToast(context, '配置名称请控制在 32 个字符以内');
       return;
     }
     final normalizedServer = switch (_type) {
@@ -647,39 +633,29 @@ class _ProfileEditorSheetState extends State<_ProfileEditorSheet> {
       DnsProfileType.system => plainServer,
     };
     if (!_isValidServerForType(normalizedServer, _type)) {
-      ShadToaster.of(
-        context,
-      ).show(const ShadToast(description: Text('服务器地址格式与当前协议不匹配')));
+      showVhostsToast(context, '服务器地址格式与当前协议不匹配');
       return;
     }
     if (_type == DnsProfileType.plain &&
         secondary.isNotEmpty &&
         !hasUriHost(secondary, scheme: 'dns')) {
-      ShadToaster.of(
-        context,
-      ).show(const ShadToast(description: Text('备用服务器仅支持 Plain DNS，且格式必须正确')));
+      showVhostsToast(context, '备用服务器仅支持 Plain DNS，且格式必须正确');
       return;
     }
     if (_type == DnsProfileType.dot &&
         !hasUriHost(dotHostname, scheme: 'dot')) {
-      ShadToaster.of(
-        context,
-      ).show(const ShadToast(description: Text('DoT 需要有效的主机名用于 TLS 校验')));
+      showVhostsToast(context, 'DoT 需要有效的主机名用于 TLS 校验');
       return;
     }
 
     final timeoutMs = int.tryParse(_timeoutController.text.trim()) ?? 1500;
     final retryCount = int.tryParse(_retryController.text.trim()) ?? 2;
     if (timeoutMs < 300 || timeoutMs > 10000) {
-      ShadToaster.of(
-        context,
-      ).show(const ShadToast(description: Text('超时时间需在 300 到 10000 ms 之间')));
+      showVhostsToast(context, '超时时间需在 300 到 10000 ms 之间');
       return;
     }
     if (retryCount < 1 || retryCount > 5) {
-      ShadToaster.of(
-        context,
-      ).show(const ShadToast(description: Text('重试次数需在 1 到 5 之间')));
+      showVhostsToast(context, '重试次数需在 1 到 5 之间');
       return;
     }
 

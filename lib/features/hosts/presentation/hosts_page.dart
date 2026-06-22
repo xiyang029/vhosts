@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 
 import '../../../app/app_state.dart';
+import '../../../app/app_theme.dart';
 import '../domain/host_rule.dart';
 
 const EdgeInsets _pagePadding = EdgeInsets.fromLTRB(18, 18, 18, 28);
@@ -141,7 +142,6 @@ class _HostsPageState extends State<HostsPage> {
 
   Future<void> _openImportSheet() async {
     final app = AppScope.of(context);
-    final toaster = ShadToaster.of(context);
     final result = await showShadSheet<String>(
       context: context,
       side: ShadSheetSide.bottom,
@@ -153,16 +153,15 @@ class _HostsPageState extends State<HostsPage> {
     }
 
     final imported = app.importHostsText(result);
-    if (!context.mounted) {
+    if (!mounted) {
       return;
     }
 
-    toaster.show(ShadToast(description: Text('已导入 $imported 条规则')));
+    showVhostsToast(context, '已导入 $imported 条规则');
   }
 
   Future<void> _confirmDeleteRule(HostRule rule) async {
     final app = AppScope.of(context);
-    final toaster = ShadToaster.of(context);
     final confirmed =
         await showShadDialog<bool>(
           context: context,
@@ -188,11 +187,11 @@ class _HostsPageState extends State<HostsPage> {
     }
 
     app.deleteHostRule(rule.id);
-    if (!context.mounted) {
+    if (!mounted) {
       return;
     }
 
-    toaster.show(ShadToast(description: Text('已删除 ${rule.domain}')));
+    showVhostsToast(context, '已删除 ${rule.domain}');
   }
 }
 
@@ -447,27 +446,19 @@ class _RuleEditorSheetState extends State<_RuleEditorSheet> {
     final ip = _ipController.text.trim();
 
     if (domain.isEmpty || ip.isEmpty) {
-      ShadToaster.of(
-        context,
-      ).show(const ShadToast(description: Text('请先填写域名和目标 IP')));
+      showVhostsToast(context, '请先填写域名和目标 IP');
       return;
     }
     if (!_isValidHostPattern(domain, _matchType)) {
-      ShadToaster.of(
-        context,
-      ).show(const ShadToast(description: Text('域名或匹配类型格式不正确')));
+      showVhostsToast(context, '域名或匹配类型格式不正确');
       return;
     }
     if (Uri.tryParse('http://$ip')?.host.isEmpty ?? true) {
-      ShadToaster.of(
-        context,
-      ).show(const ShadToast(description: Text('目标 IP 格式不正确')));
+      showVhostsToast(context, '目标 IP 格式不正确');
       return;
     }
     if (_noteController.text.trim().length > 40) {
-      ShadToaster.of(
-        context,
-      ).show(const ShadToast(description: Text('备注请控制在 40 个字符以内')));
+      showVhostsToast(context, '备注请控制在 40 个字符以内');
       return;
     }
 
