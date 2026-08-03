@@ -40,7 +40,6 @@ class DnsProfile {
     required this.type,
     required this.server,
     required this.secondaryServer,
-    required this.dohUrl,
     required this.dotHostname,
     required this.timeoutMs,
     required this.retryCount,
@@ -55,7 +54,6 @@ class DnsProfile {
   final DnsProfileType type;
   final String server;
   final String secondaryServer;
-  final String dohUrl;
   final String dotHostname;
   final int timeoutMs;
   final int retryCount;
@@ -75,7 +73,6 @@ class DnsProfile {
       ),
       server: stringValue(json['server']),
       secondaryServer: stringValue(json['secondaryServer']),
-      dohUrl: stringValue(json['dohUrl']),
       dotHostname: stringValue(json['dotHostname']),
       timeoutMs: intValue(json['timeoutMs'], 1500),
       retryCount: intValue(json['retryCount'], 1),
@@ -96,7 +93,6 @@ class DnsProfile {
     DnsProfileType? type,
     String? server,
     String? secondaryServer,
-    String? dohUrl,
     String? dotHostname,
     int? timeoutMs,
     int? retryCount,
@@ -111,7 +107,6 @@ class DnsProfile {
       type: type ?? this.type,
       server: server ?? this.server,
       secondaryServer: secondaryServer ?? this.secondaryServer,
-      dohUrl: dohUrl ?? this.dohUrl,
       dotHostname: dotHostname ?? this.dotHostname,
       timeoutMs: timeoutMs ?? this.timeoutMs,
       retryCount: retryCount ?? this.retryCount,
@@ -129,7 +124,6 @@ class DnsProfile {
       'type': type.name,
       'server': server,
       'secondaryServer': secondaryServer,
-      'dohUrl': dohUrl,
       'dotHostname': dotHostname,
       'timeoutMs': timeoutMs,
       'retryCount': retryCount,

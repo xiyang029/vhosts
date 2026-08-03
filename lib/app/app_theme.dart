@@ -17,9 +17,6 @@ const vhostsNeutral = Color(0xFF667085);
 const vhostsVpnActive = vhostsSuccess;
 const vhostsVpnInactive = vhostsAccent;
 const vhostsVpnUnauthorized = vhostsWarning;
-const vhostsAliyunDns = Color(0xFF0A84FF);
-const vhostsGoogleDns = Color(0xFF155EEF);
-const vhostsCloudflareDns = Color(0xFF7A5AF8);
 
 class _VhostsToastPlatformService {
   static const MethodChannel _channel = MethodChannel('vhosts/toast');

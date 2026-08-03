@@ -3,6 +3,7 @@ import 'package:shadcn_ui/shadcn_ui.dart';
 
 import '../../../app/app_state.dart';
 import '../../../app/app_theme.dart';
+import '../../../shared/widgets/labeled_field.dart';
 import '../domain/host_rule.dart';
 
 const EdgeInsets _pagePadding = EdgeInsets.fromLTRB(18, 18, 18, 28);
@@ -56,11 +57,14 @@ class _HostsPageState extends State<HostsPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                ShadInput(
-                  controller: _searchController,
-                  onChanged: (_) => setState(() {}),
-                  leading: const Icon(LucideIcons.search),
-                  placeholder: const Text('搜索域名、IP、备注'),
+                LabeledField(
+                  label: '搜索规则',
+                  child: ShadInput(
+                    controller: _searchController,
+                    onChanged: (_) => setState(() {}),
+                    leading: const Icon(LucideIcons.search),
+                    placeholder: const Text('域名、IP 或备注'),
+                  ),
                 ),
                 const SizedBox(height: 14),
                 ShadTabs<int>(
@@ -322,11 +326,14 @@ class _HostsImportSheetState extends State<_HostsImportSheet> {
       ],
       child: Padding(
         padding: _sheetContentPadding,
-        child: ShadTextarea(
-          controller: _controller,
-          minHeight: 180,
-          maxHeight: 320,
-          placeholder: const Text('每行一条：IP 域名1 域名2 ...'),
+        child: LabeledField(
+          label: 'Hosts 内容',
+          child: ShadTextarea(
+            controller: _controller,
+            minHeight: 180,
+            maxHeight: 320,
+            placeholder: const Text('每行一条：IP 域名1 域名2 ...'),
+          ),
         ),
       ),
     );
@@ -374,9 +381,12 @@ class _RuleEditorSheetState extends State<_RuleEditorSheet> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            ShadInput(
-              controller: _domainController,
-              placeholder: Text(_domainHintText(_matchType)),
+            LabeledField(
+              label: '域名',
+              child: ShadInput(
+                controller: _domainController,
+                placeholder: Text(_domainHintText(_matchType)),
+              ),
             ),
             const SizedBox(height: 12),
             Column(
@@ -411,14 +421,20 @@ class _RuleEditorSheetState extends State<_RuleEditorSheet> {
               style: ShadTheme.of(context).textTheme.muted,
             ),
             const SizedBox(height: 12),
-            ShadInput(
-              controller: _ipController,
-              placeholder: const Text('例如 127.0.0.1'),
+            LabeledField(
+              label: '目标 IP',
+              child: ShadInput(
+                controller: _ipController,
+                placeholder: const Text('例如 127.0.0.1'),
+              ),
             ),
             const SizedBox(height: 12),
-            ShadInput(
-              controller: _noteController,
-              placeholder: const Text('备注，可选'),
+            LabeledField(
+              label: '备注',
+              child: ShadInput(
+                controller: _noteController,
+                placeholder: const Text('可选，最多 40 个字符'),
+              ),
             ),
             const SizedBox(height: 12),
             Row(
@@ -486,7 +502,6 @@ bool _isValidHostPattern(String domain, HostMatchType matchType) {
   return switch (matchType) {
     HostMatchType.exact => !value.contains('*'),
     HostMatchType.suffix => value.startsWith('*.') && value.length > 2,
-    HostMatchType.wildcard => value.contains('*'),
   };
 }
 
@@ -494,7 +509,6 @@ String _domainHintText(HostMatchType matchType) {
   return switch (matchType) {
     HostMatchType.exact => '例如 example.com',
     HostMatchType.suffix => '例如 *.example.com',
-    HostMatchType.wildcard => '例如 api-*.example.com',
   };
 }
 
@@ -502,6 +516,5 @@ String _matchTypeHelpText(HostMatchType matchType) {
   return switch (matchType) {
     HostMatchType.exact => '精确匹配：直接填写完整域名，例如 example.com',
     HostMatchType.suffix => '后缀匹配：必须以 *. 开头，例如 *.example.com',
-    HostMatchType.wildcard => '通配符匹配：包含 * 即可，例如 api-*.example.com',
   };
 }

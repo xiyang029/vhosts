@@ -1,12 +1,11 @@
 import '../../../shared/utils/app_utils.dart';
 
-enum HostMatchType { exact, suffix, wildcard }
+enum HostMatchType { exact, suffix }
 
 extension HostMatchTypeX on HostMatchType {
   String get label => switch (this) {
     HostMatchType.exact => '精确',
     HostMatchType.suffix => '后缀',
-    HostMatchType.wildcard => '通配',
   };
 }
 

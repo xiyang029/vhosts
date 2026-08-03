@@ -4,6 +4,7 @@ import 'package:shadcn_ui/shadcn_ui.dart';
 import '../../../app/app_state.dart';
 import '../../../app/app_theme.dart';
 import '../../../shared/utils/app_utils.dart';
+import '../../../shared/widgets/labeled_field.dart';
 import '../domain/dns_profile.dart';
 
 const EdgeInsets _pagePadding = EdgeInsets.fromLTRB(18, 18, 18, 28);
@@ -22,7 +23,6 @@ class _DnsPageState extends State<DnsPage> {
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
     final activeProfile = app.activeDnsProfile;
-    final theme = ShadTheme.of(context);
 
     return SafeArea(
       child: ListView(
@@ -64,7 +64,7 @@ class _DnsPageState extends State<DnsPage> {
                         child: const Text('测试'),
                       ),
                     ),
-                    if (!_isQuickSwitchProfile(activeProfile.id)) ...[
+                    if (!app.isProtectedDnsProfile(activeProfile.id)) ...[
                       const SizedBox(width: 12),
                       Expanded(
                         child: ShadButton.outline(
@@ -84,65 +84,6 @@ class _DnsPageState extends State<DnsPage> {
           ShadCard(
             padding: _cardPadding,
             child: Column(
-              children: [
-                for (final (index, preset) in _quickSwitchProfiles.indexed) ...[
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 42,
-                          height: 42,
-                          decoration: BoxDecoration(
-                            color: preset.color.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          child: Icon(preset.icon, color: preset.color),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                preset.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              const SizedBox(height: 3),
-                              Text(
-                                preset.subtitle,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: theme.textTheme.muted,
-                              ),
-                            ],
-                          ),
-                        ),
-                        ShadButton.ghost(
-                          onPressed: () => _activatePreset(preset),
-                          child: Icon(
-                            preset.profile.id == activeProfile.id
-                                ? LucideIcons.circleCheck
-                                : LucideIcons.zap,
-                            color: preset.profile.id == activeProfile.id
-                                ? vhostsSuccess
-                                : preset.color,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (index != _quickSwitchProfiles.length - 1)
-                    const ShadSeparator.horizontal(),
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(height: 14),
-          ShadCard(
-            padding: _cardPadding,
-            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
@@ -155,24 +96,20 @@ class _DnsPageState extends State<DnsPage> {
                   ],
                 ),
                 const SizedBox(height: 12),
-                ...app.visibleDnsProfiles
-                    .where(
-                      (profile) =>
-                          !quickSwitchDnsProfileIds.contains(profile.id),
-                    )
-                    .map(
-                      (profile) => Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: _DnsProfileCard(
-                          profile: profile,
-                          onActivate: () {
-                            app.setActiveDnsProfile(profile.id);
-                          },
-                          onEdit: () => _openProfileEditor(existing: profile),
-                          onDelete: () => _confirmDeleteProfile(profile),
-                        ),
-                      ),
+                ...app.dnsProfiles.map(
+                  (profile) => Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: _DnsProfileCard(
+                      profile: profile,
+                      isProtected: app.isProtectedDnsProfile(profile.id),
+                      onActivate: () {
+                        app.setActiveDnsProfile(profile.id);
+                      },
+                      onEdit: () => _openProfileEditor(existing: profile),
+                      onDelete: () => _confirmDeleteProfile(profile),
                     ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -194,17 +131,6 @@ class _DnsPageState extends State<DnsPage> {
     }
 
     app.upsertDnsProfile(result);
-  }
-
-  void _activatePreset(_QuickSwitchProfile preset) {
-    final app = AppScope.of(context);
-    final exists = app.dnsProfiles.any(
-      (profile) => profile.id == preset.profile.id,
-    );
-    if (!exists) {
-      app.upsertDnsProfile(preset.profile);
-    }
-    app.setActiveDnsProfile(preset.profile.id);
   }
 
   Future<void> _confirmDeleteProfile(DnsProfile profile) async {
@@ -241,98 +167,17 @@ class _DnsPageState extends State<DnsPage> {
   }
 }
 
-class _QuickSwitchProfile {
-  const _QuickSwitchProfile({
-    required this.profile,
-    required this.subtitle,
-    required this.icon,
-    required this.color,
-  });
-
-  final DnsProfile profile;
-  final String subtitle;
-  final IconData icon;
-  final Color color;
-
-  String get name => profile.name;
-}
-
-const List<_QuickSwitchProfile> _quickSwitchProfiles = [
-  _QuickSwitchProfile(
-    profile: DnsProfile(
-      id: aliyunDefaultDnsProfileId,
-      name: '阿里云 DNS',
-      type: DnsProfileType.plain,
-      server: '223.5.5.5:53',
-      secondaryServer: '223.6.6.6:53',
-      dohUrl: '',
-      dotHostname: '',
-      timeoutMs: 1500,
-      retryCount: 2,
-      enabled: true,
-      healthStatus: DnsHealthStatus.unknown,
-      healthDetail: '阿里云公共递归 DNS，适合作为默认快速切换项',
-      latencyMs: null,
-    ),
-    subtitle: '223.5.5.5 / 223.6.6.6',
-    icon: LucideIcons.cloud,
-    color: vhostsAliyunDns,
-  ),
-  _QuickSwitchProfile(
-    profile: DnsProfile(
-      id: googleDefaultDnsProfileId,
-      name: 'Google Public DNS',
-      type: DnsProfileType.plain,
-      server: '8.8.8.8:53',
-      secondaryServer: '8.8.4.4:53',
-      dohUrl: '',
-      dotHostname: '',
-      timeoutMs: 1500,
-      retryCount: 2,
-      enabled: true,
-      healthStatus: DnsHealthStatus.unknown,
-      healthDetail: 'Google 公共递归 DNS，稳定性和可用性较高',
-      latencyMs: null,
-    ),
-    subtitle: '8.8.8.8 / 8.8.4.4',
-    icon: LucideIcons.earth,
-    color: vhostsGoogleDns,
-  ),
-  _QuickSwitchProfile(
-    profile: DnsProfile(
-      id: cloudflareDefaultDnsProfileId,
-      name: 'Cloudflare DNS',
-      type: DnsProfileType.plain,
-      server: '1.1.1.1:53',
-      secondaryServer: '1.0.0.1:53',
-      dohUrl: '',
-      dotHostname: '',
-      timeoutMs: 1500,
-      retryCount: 2,
-      enabled: true,
-      healthStatus: DnsHealthStatus.unknown,
-      healthDetail: 'Cloudflare 公共递归 DNS，延迟和隐私表现都不错',
-      latencyMs: null,
-    ),
-    subtitle: '1.1.1.1 / 1.0.0.1',
-    icon: LucideIcons.shield,
-    color: vhostsCloudflareDns,
-  ),
-];
-
-bool _isQuickSwitchProfile(String id) {
-  return quickSwitchDnsProfileIds.contains(id);
-}
-
 class _DnsProfileCard extends StatelessWidget {
   const _DnsProfileCard({
     required this.profile,
+    required this.isProtected,
     required this.onActivate,
     required this.onEdit,
     required this.onDelete,
   });
 
   final DnsProfile profile;
+  final bool isProtected;
   final VoidCallback onActivate;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
@@ -395,7 +240,7 @@ class _DnsProfileCard extends StatelessWidget {
                   ),
                 ),
               ),
-              if (!_isQuickSwitchProfile(profile.id)) ...[
+              if (!isProtected) ...[
                 const SizedBox(width: 4),
                 ShadTooltip(
                   builder: (context) => const Text('编辑'),
@@ -438,9 +283,7 @@ class _ProfileEditorSheet extends StatefulWidget {
 
 class _ProfileEditorSheetState extends State<_ProfileEditorSheet> {
   late final TextEditingController _nameController;
-  late final TextEditingController _plainServerController;
-  late final TextEditingController _dohUrlController;
-  late final TextEditingController _dotServerController;
+  late final TextEditingController _serverController;
   late final TextEditingController _secondaryController;
   late final TextEditingController _dotController;
   late final TextEditingController _timeoutController;
@@ -452,20 +295,8 @@ class _ProfileEditorSheetState extends State<_ProfileEditorSheet> {
   void initState() {
     super.initState();
     _nameController = TextEditingController(text: widget.existing?.name ?? '');
-    _plainServerController = TextEditingController(
+    _serverController = TextEditingController(
       text: widget.existing?.server ?? '',
-    );
-    _dohUrlController = TextEditingController(
-      text: widget.existing?.type == DnsProfileType.doh
-          ? (widget.existing?.dohUrl.isNotEmpty == true
-                ? widget.existing!.dohUrl
-                : widget.existing?.server ?? '')
-          : '',
-    );
-    _dotServerController = TextEditingController(
-      text: widget.existing?.type == DnsProfileType.dot
-          ? widget.existing?.server ?? ''
-          : '',
     );
     _secondaryController = TextEditingController(
       text: widget.existing?.secondaryServer ?? '',
@@ -479,16 +310,14 @@ class _ProfileEditorSheetState extends State<_ProfileEditorSheet> {
     _retryController = TextEditingController(
       text: (widget.existing?.retryCount ?? 2).toString(),
     );
-    _type = widget.existing?.type ?? DnsProfileType.plain;
+    _type = widget.existing?.type ?? DnsProfileType.doh;
     _enabled = widget.existing?.enabled ?? true;
   }
 
   @override
   void dispose() {
     _nameController.dispose();
-    _plainServerController.dispose();
-    _dohUrlController.dispose();
-    _dotServerController.dispose();
+    _serverController.dispose();
     _secondaryController.dispose();
     _dotController.dispose();
     _timeoutController.dispose();
@@ -535,35 +364,38 @@ class _ProfileEditorSheetState extends State<_ProfileEditorSheet> {
               ],
             ),
             const SizedBox(height: 12),
-            ShadInput(
-              controller: _nameController,
-              placeholder: const Text('例如 家庭 DNS'),
+            LabeledField(
+              label: '配置名称',
+              child: ShadInput(
+                controller: _nameController,
+                placeholder: const Text('例如 家庭 DNS'),
+              ),
             ),
             const SizedBox(height: 12),
+            LabeledField(
+              label: _serverLabelText(_type),
+              child: ShadInput(
+                controller: _serverController,
+                placeholder: Text(_serverHintText(_type)),
+              ),
+            ),
             if (_type == DnsProfileType.plain) ...[
-              ShadInput(
-                controller: _plainServerController,
-                placeholder: const Text('例如 223.5.5.5 或 223.5.5.5:53'),
-              ),
               const SizedBox(height: 12),
-              ShadInput(
-                controller: _secondaryController,
-                placeholder: const Text('备用服务器，可选'),
-              ),
-            ] else if (_type == DnsProfileType.doh) ...[
-              ShadInput(
-                controller: _dohUrlController,
-                placeholder: const Text('https://dns.example.com/dns-query'),
+              LabeledField(
+                label: '备用服务器',
+                child: ShadInput(
+                  controller: _secondaryController,
+                  placeholder: const Text('可选，例如 223.6.6.6:53'),
+                ),
               ),
             ] else if (_type == DnsProfileType.dot) ...[
-              ShadInput(
-                controller: _dotServerController,
-                placeholder: const Text('例如 1.1.1.1:853'),
-              ),
               const SizedBox(height: 12),
-              ShadInput(
-                controller: _dotController,
-                placeholder: const Text('例如 cloudflare-dns.com'),
+              LabeledField(
+                label: 'TLS 主机名',
+                child: ShadInput(
+                  controller: _dotController,
+                  placeholder: const Text('例如 cloudflare-dns.com'),
+                ),
               ),
             ],
             const SizedBox(height: 12),
@@ -588,18 +420,24 @@ class _ProfileEditorSheetState extends State<_ProfileEditorSheet> {
             Row(
               children: [
                 Expanded(
-                  child: ShadInput(
-                    keyboardType: TextInputType.number,
-                    controller: _timeoutController,
-                    placeholder: const Text('超时 (ms)'),
+                  child: LabeledField(
+                    label: '超时 (ms)',
+                    child: ShadInput(
+                      keyboardType: TextInputType.number,
+                      controller: _timeoutController,
+                      placeholder: const Text('1500'),
+                    ),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: ShadInput(
-                    keyboardType: TextInputType.number,
-                    controller: _retryController,
-                    placeholder: const Text('重试次数'),
+                  child: LabeledField(
+                    label: '重试次数',
+                    child: ShadInput(
+                      keyboardType: TextInputType.number,
+                      controller: _retryController,
+                      placeholder: const Text('2'),
+                    ),
                   ),
                 ),
               ],
@@ -612,9 +450,7 @@ class _ProfileEditorSheetState extends State<_ProfileEditorSheet> {
 
   void _save() {
     final name = _nameController.text.trim();
-    final plainServer = _plainServerController.text.trim();
-    final dohUrl = _dohUrlController.text.trim();
-    final dotServer = _dotServerController.text.trim();
+    final server = _serverController.text.trim();
     final secondary = _secondaryController.text.trim();
     final dotHostname = _dotController.text.trim();
 
@@ -626,13 +462,7 @@ class _ProfileEditorSheetState extends State<_ProfileEditorSheet> {
       showVhostsToast(context, '配置名称请控制在 32 个字符以内');
       return;
     }
-    final normalizedServer = switch (_type) {
-      DnsProfileType.plain => plainServer,
-      DnsProfileType.doh => dohUrl,
-      DnsProfileType.dot => dotServer,
-      DnsProfileType.system => plainServer,
-    };
-    if (!_isValidServerForType(normalizedServer, _type)) {
+    if (!_isValidServerForType(server, _type)) {
       showVhostsToast(context, '服务器地址格式与当前协议不匹配');
       return;
     }
@@ -665,11 +495,8 @@ class _ProfileEditorSheetState extends State<_ProfileEditorSheet> {
         id: widget.existing?.id ?? 'dp_${now.millisecondsSinceEpoch}',
         name: name,
         type: _type,
-        server: _type == DnsProfileType.plain || _type == DnsProfileType.dot
-            ? normalizedServer
-            : '',
+        server: server,
         secondaryServer: _type == DnsProfileType.plain ? secondary : '',
-        dohUrl: _type == DnsProfileType.doh ? normalizedServer : '',
         dotHostname: _type == DnsProfileType.dot ? dotHostname : '',
         timeoutMs: timeoutMs,
         retryCount: retryCount,
@@ -765,8 +592,8 @@ class _InfoItem extends StatelessWidget {
 }
 
 const List<DnsProfileType> _editableDnsProfileTypes = [
-  DnsProfileType.plain,
   DnsProfileType.doh,
+  DnsProfileType.plain,
   DnsProfileType.dot,
 ];
 
@@ -782,4 +609,22 @@ bool _isValidServerForType(String value, DnsProfileType type) {
 bool _isValidDohUrl(String value) {
   final uri = Uri.tryParse(value.trim());
   return uri != null && uri.scheme == 'https' && uri.host.isNotEmpty;
+}
+
+String _serverHintText(DnsProfileType type) {
+  return switch (type) {
+    DnsProfileType.plain => '例如 223.5.5.5 或 223.5.5.5:53',
+    DnsProfileType.doh => 'https://dns.example.com/dns-query',
+    DnsProfileType.dot => '例如 1.1.1.1:853',
+    DnsProfileType.system => '系统 DNS',
+  };
+}
+
+String _serverLabelText(DnsProfileType type) {
+  return switch (type) {
+    DnsProfileType.plain => '主服务器',
+    DnsProfileType.doh => 'DoH URL',
+    DnsProfileType.dot => 'DoT 服务器',
+    DnsProfileType.system => '系统 DNS',
+  };
 }

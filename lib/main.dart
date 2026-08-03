@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_downloader/flutter_downloader.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
+import 'package:flutter_singbox_client/flutter_singbox_client.dart';
 
 import 'app/app_shell.dart';
 import 'app/app_state.dart';
@@ -13,6 +14,7 @@ import 'core/services/app_update_service.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await FlutterDownloader.initialize(debug: false);
+  await SingboxClient().initialize();
   runApp(const VhostsApp());
 }
 
@@ -56,10 +58,7 @@ class _VhostsAppState extends State<VhostsApp> {
     if (context == null || !context.mounted) {
       return;
     }
-    await _updateService.checkForUpdates(
-      context,
-      showUpToDateToast: false,
-    );
+    await _updateService.checkForUpdates(context, showUpToDateToast: false);
   }
 
   @override

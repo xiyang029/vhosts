@@ -33,7 +33,7 @@ class _SettingsPageState extends State<SettingsPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _SettingsTile(
+                _SettingsRow(
                   icon: LucideIcons.network,
                   title: '允许 IPv6',
                   trailing: ShadSwitch(
@@ -41,7 +41,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     onChanged: app.setAllowIpv6,
                   ),
                 ),
-                _SettingsTile(
+                _SettingsRow(
                   icon: LucideIcons.download,
                   title: checkingUpdate ? '检查中...' : '检查更新',
                   onTap: checkingUpdate ? null : _checkForUpdates,
@@ -84,8 +84,8 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 }
 
-class _SettingsTile extends StatelessWidget {
-  const _SettingsTile({
+class _SettingsRow extends StatelessWidget {
+  const _SettingsRow({
     required this.icon,
     required this.title,
     required this.trailing,
