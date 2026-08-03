@@ -1,35 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import '../../../app/app_theme.dart';
-import '../../../shared/utils/app_utils.dart';
-
-enum DnsProfileType { system, plain, doh, dot }
+enum DnsProfileType { plain, doh, dot }
 
 extension DnsProfileTypeX on DnsProfileType {
   String get label => switch (this) {
-    DnsProfileType.system => 'System DNS',
     DnsProfileType.plain => 'Plain DNS',
     DnsProfileType.doh => 'DoH',
     DnsProfileType.dot => 'DoT',
   };
 
   IconData get icon => switch (this) {
-    DnsProfileType.system => LucideIcons.settings,
     DnsProfileType.plain => LucideIcons.globe,
     DnsProfileType.doh => LucideIcons.shield,
     DnsProfileType.dot => LucideIcons.badgeCheck,
-  };
-}
-
-enum DnsHealthStatus { healthy, degraded, offline, unknown }
-
-extension DnsHealthStatusX on DnsHealthStatus {
-  Color get color => switch (this) {
-    DnsHealthStatus.healthy => vhostsSuccess,
-    DnsHealthStatus.degraded => vhostsWarning,
-    DnsHealthStatus.offline => vhostsDanger,
-    DnsHealthStatus.unknown => vhostsNeutral,
   };
 }
 
@@ -44,9 +28,6 @@ class DnsProfile {
     required this.timeoutMs,
     required this.retryCount,
     required this.enabled,
-    required this.healthStatus,
-    required this.healthDetail,
-    this.latencyMs,
   });
 
   final String id;
@@ -58,32 +39,18 @@ class DnsProfile {
   final int timeoutMs;
   final int retryCount;
   final bool enabled;
-  final DnsHealthStatus healthStatus;
-  final String healthDetail;
-  final int? latencyMs;
 
   factory DnsProfile.fromJson(Map<String, dynamic> json) {
     return DnsProfile(
-      id: stringValue(json['id']),
-      name: stringValue(json['name']),
-      type: enumByName(
-        DnsProfileType.values,
-        stringValue(json['type']),
-        DnsProfileType.system,
-      ),
-      server: stringValue(json['server']),
-      secondaryServer: stringValue(json['secondaryServer']),
-      dotHostname: stringValue(json['dotHostname']),
-      timeoutMs: intValue(json['timeoutMs'], 1500),
-      retryCount: intValue(json['retryCount'], 1),
-      enabled: boolValue(json['enabled']),
-      healthStatus: enumByName(
-        DnsHealthStatus.values,
-        stringValue(json['healthStatus']),
-        DnsHealthStatus.unknown,
-      ),
-      healthDetail: stringValue(json['healthDetail']),
-      latencyMs: nullableIntValue(json['latencyMs']),
+      id: json['id'] as String,
+      name: json['name'] as String,
+      type: DnsProfileType.values.byName(json['type'] as String),
+      server: json['server'] as String,
+      secondaryServer: json['secondaryServer'] as String,
+      dotHostname: json['dotHostname'] as String,
+      timeoutMs: (json['timeoutMs'] as num).toInt(),
+      retryCount: (json['retryCount'] as num).toInt(),
+      enabled: json['enabled'] as bool,
     );
   }
 
@@ -97,9 +64,6 @@ class DnsProfile {
     int? timeoutMs,
     int? retryCount,
     bool? enabled,
-    DnsHealthStatus? healthStatus,
-    String? healthDetail,
-    int? latencyMs,
   }) {
     return DnsProfile(
       id: id ?? this.id,
@@ -111,9 +75,6 @@ class DnsProfile {
       timeoutMs: timeoutMs ?? this.timeoutMs,
       retryCount: retryCount ?? this.retryCount,
       enabled: enabled ?? this.enabled,
-      healthStatus: healthStatus ?? this.healthStatus,
-      healthDetail: healthDetail ?? this.healthDetail,
-      latencyMs: latencyMs ?? this.latencyMs,
     );
   }
 
@@ -128,9 +89,6 @@ class DnsProfile {
       'timeoutMs': timeoutMs,
       'retryCount': retryCount,
       'enabled': enabled,
-      'healthStatus': healthStatus.name,
-      'healthDetail': healthDetail,
-      'latencyMs': latencyMs,
     };
   }
 }

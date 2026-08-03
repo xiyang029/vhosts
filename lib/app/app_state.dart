@@ -3,16 +3,16 @@ import 'dart:collection';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:flutter_singbox_client/flutter_singbox_client.dart';
 
 import '../core/platform/app_storage_platform_service.dart';
+import '../core/platform/dns_vpn_platform_service.dart';
 import '../core/platform/vpn_status.dart';
 import '../features/dns/domain/dns_profile.dart';
 import '../features/hosts/domain/host_rule.dart';
-import '../shared/utils/app_utils.dart';
 
 const String aliyunDefaultDnsProfileId = 'dp_default_alidns';
+
+const Set<String> _protectedDnsProfileIds = <String>{aliyunDefaultDnsProfileId};
 
 class AppScope extends InheritedNotifier<AppState> {
   const AppScope({
@@ -28,16 +28,7 @@ class AppScope extends InheritedNotifier<AppState> {
   }
 }
 
-List<DnsProfile> _defaultDnsProfiles() => [_aliyunDefaultDnsProfile];
-
-String? _activeDnsProfileId(Iterable<DnsProfile> profiles) {
-  for (final profile in profiles) {
-    if (profile.enabled) {
-      return profile.id;
-    }
-  }
-  return null;
-}
+List<DnsProfile> _defaultDnsProfiles() => const [_aliyunDefaultDnsProfile];
 
 List<T> _replaceOrPrepend<T>(
   List<T> items,
@@ -59,35 +50,27 @@ class AppState extends ChangeNotifier {
     : _vpnStatus = VpnStatus.idle,
       _hostRules = const <HostRule>[],
       _dnsProfiles = _defaultDnsProfiles() {
-    try {
-      _vpnStateSubscription = _singboxClient.serviceStateStream.listen(
-        _applySingboxState,
-        onError: (_) {},
-      );
-    } on StateError {
-      // The plugin is initialized before AppState in the Android entrypoint.
-    }
+    _vpnStateSubscription = DnsVpnPlatformService.statusStream.listen(
+      _applyVpnState,
+      onError: (_) {},
+    );
   }
-
-  static final SingboxClient _singboxClient = SingboxClient();
 
   VpnStatus _vpnStatus;
   bool _vpnAuthorized = false;
-  bool _allowIpv6 = true;
   List<HostRule> _hostRules;
   List<DnsProfile> _dnsProfiles;
-  StreamSubscription<ServiceState>? _vpnStateSubscription;
+  StreamSubscription<String>? _vpnStateSubscription;
   bool _disposed = false;
 
   VpnStatus get vpnStatus => _vpnStatus;
   bool get vpnAuthorized => _vpnAuthorized;
-  bool get allowIpv6 => _allowIpv6;
   UnmodifiableListView<HostRule> get hostRules =>
       UnmodifiableListView(_hostRules);
   UnmodifiableListView<DnsProfile> get dnsProfiles =>
       UnmodifiableListView(_dnsProfiles);
   bool isProtectedDnsProfile(String id) {
-    return id == aliyunDefaultDnsProfileId;
+    return _protectedDnsProfileIds.contains(id);
   }
 
   DnsProfile get activeDnsProfile {
@@ -126,7 +109,7 @@ class AppState extends ChangeNotifier {
   Future<void> hydrate() async {
     final raw = await AppStoragePlatformService.load();
     if (raw == null || raw.trim().isEmpty) {
-      _resetToDefaultConfiguration();
+      _setDefaultConfiguration();
       unawaited(_persist());
       notifyListeners();
       return;
@@ -139,40 +122,23 @@ class AppState extends ChangeNotifier {
       }
 
       final root = Map<String, dynamic>.from(decoded);
-      final hostRulesJson = root['hostRules'];
-      final dnsProfilesJson = root['dnsProfiles'];
-      final allowIpv6 = root['allowIpv6'];
-      final activeDnsProfileId = stringValue(root['activeDnsProfileId']);
-
-      if (hostRulesJson is List) {
-        _hostRules = hostRulesJson
-            .whereType<Map>()
-            .map((item) => HostRule.fromJson(Map<String, dynamic>.from(item)))
-            .toList(growable: false);
-      }
-
-      _dnsProfiles = dnsProfilesJson is List
-          ? [
-              _aliyunDefaultDnsProfile,
-              ...dnsProfilesJson
-                  .whereType<Map>()
-                  .map(
-                    (item) =>
-                        DnsProfile.fromJson(Map<String, dynamic>.from(item)),
-                  )
-                  .where((profile) => !isProtectedDnsProfile(profile.id)),
-            ]
-          : _defaultDnsProfiles();
-
-      if (allowIpv6 is bool) {
-        _allowIpv6 = allowIpv6;
-      }
-
-      _normalizeActiveDnsProfiles(
-        preferredId: activeDnsProfileId.isEmpty ? null : activeDnsProfileId,
-      );
+      final hostRulesJson = root['hostRules'] as List<dynamic>;
+      final dnsProfilesJson = root['dnsProfiles'] as List<dynamic>;
+      _hostRules = hostRulesJson
+          .map(
+            (item) => HostRule.fromJson(Map<String, dynamic>.from(item as Map)),
+          )
+          .toList(growable: false);
+      final storedProfiles = dnsProfilesJson
+          .map(
+            (item) =>
+                DnsProfile.fromJson(Map<String, dynamic>.from(item as Map)),
+          )
+          .where((profile) => !isProtectedDnsProfile(profile.id));
+      _dnsProfiles = [..._defaultDnsProfiles(), ...storedProfiles];
+      _normalizeActiveDnsProfiles();
     } catch (_) {
-      _resetToDefaultConfiguration();
+      _setDefaultConfiguration();
     }
 
     unawaited(_persist());
@@ -180,7 +146,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<bool> requestVpnPermission() async {
-    final granted = await _requestSingboxPermission();
+    final granted = await DnsVpnPlatformService.requestPermission();
     _vpnAuthorized = granted;
     if (granted && _vpnStatus == VpnStatus.unauthorized) {
       _vpnStatus = VpnStatus.idle;
@@ -199,44 +165,20 @@ class AppState extends ChangeNotifier {
     }
 
     _setVpnStatus(VpnStatus.starting);
-    final configurationJson = _buildConfigurationJson();
-    try {
-      await _singboxClient.checkConfig(configurationJson);
-    } on PlatformException {
-      _setVpnStatus(VpnStatus.error);
-      return;
-    }
-    try {
-      await _singboxClient.connect(
-        SessionOptions(
-          config: configurationJson,
-          networkMode: NetworkMode.vpn,
-          notification: const NotificationConfig(
-            title: 'vhosts',
-            channelName: 'vhosts VPN',
-            showStopButton: true,
-            stopButtonLabel: '断开',
-          ),
-        ),
-      );
-    } on PlatformException {
+    final started = await DnsVpnPlatformService.start(
+      profile: activeDnsProfile,
+      hostRules: _hostRules,
+    );
+    if (!started) {
       _setVpnStatus(VpnStatus.error);
     }
   }
 
   Future<void> stopVpn() async {
     _setVpnStatus(VpnStatus.stopping);
-    try {
-      await _singboxClient.disconnect();
-    } on PlatformException {
+    if (!await DnsVpnPlatformService.stop()) {
       _setVpnStatus(VpnStatus.error);
     }
-  }
-
-  void setAllowIpv6(bool value) {
-    _allowIpv6 = value;
-    unawaited(_persist());
-    notifyListeners();
   }
 
   void upsertHostRule(HostRule rule) {
@@ -324,14 +266,14 @@ class AppState extends ChangeNotifier {
       profile,
     );
     _normalizeActiveDnsProfiles(
-      preferredId: profile.enabled ? profile.id : null,
+      selectedId: profile.enabled ? profile.id : null,
     );
     unawaited(_persist());
     notifyListeners();
   }
 
   void setActiveDnsProfile(String id) {
-    _normalizeActiveDnsProfiles(preferredId: id);
+    _normalizeActiveDnsProfiles(selectedId: id);
     unawaited(_persist());
     notifyListeners();
   }
@@ -348,262 +290,13 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<int?> testDnsProfile(String id) async {
+  Future<DnsTestResult?> testDnsProfile(String id) async {
     final index = _dnsProfiles.indexWhere((profile) => profile.id == id);
     if (index < 0) {
       return null;
     }
 
-    final profile = _dnsProfiles[index];
-    var valid = false;
-    try {
-      await _singboxClient.checkConfig(
-        _buildConfigurationJson(activeProfileOverride: profile),
-      );
-      valid = true;
-    } on PlatformException {
-      valid = false;
-    }
-    final nextStatus = valid
-        ? DnsHealthStatus.healthy
-        : DnsHealthStatus.offline;
-    final detail = valid
-        ? '${profile.name} 配置已通过 sing-box 核心校验'
-        : '${profile.name} 配置未通过 sing-box 核心校验，请检查服务器地址';
-    const int? elapsedMs = null;
-
-    _dnsProfiles[index] = profile.copyWith(
-      healthStatus: nextStatus,
-      healthDetail: detail,
-      latencyMs: elapsedMs,
-    );
-    notifyListeners();
-    return elapsedMs;
-  }
-
-  String _buildConfigurationJson({DnsProfile? activeProfileOverride}) {
-    final activeDnsProfileId = _activeDnsProfileId(_dnsProfiles);
-    final activeProfile =
-        activeProfileOverride ??
-        _dnsProfiles.firstWhere(
-          (profile) => profile.id == activeDnsProfileId,
-          orElse: () => _dnsProfiles.first,
-        );
-    final primaryServer = _dnsServerForProfile(
-      activeProfile,
-      tag: 'vhosts-dns-primary',
-    );
-    final secondaryServer = _secondaryDnsServerForProfile(activeProfile);
-    final dnsServers = <Map<String, dynamic>>[
-      if (_serverNeedsBootstrapResolver(primaryServer))
-        <String, dynamic>{'type': 'local', 'tag': 'vhosts-bootstrap'},
-      primaryServer,
-      ...?(secondaryServer == null
-          ? null
-          : <Map<String, dynamic>>[secondaryServer]),
-    ];
-    final dnsRules = <Map<String, dynamic>>[];
-    for (final rule in _hostRules.where((item) => item.enabled)) {
-      final hostRule = _dnsRuleForHost(rule);
-      if (hostRule != null) {
-        dnsRules.add(hostRule);
-      }
-    }
-    if (secondaryServer == null) {
-      dnsRules.add(<String, dynamic>{
-        'action': 'route',
-        'server': 'vhosts-dns-primary',
-        'timeout': '${activeProfile.timeoutMs}ms',
-      });
-    } else {
-      dnsRules.add(<String, dynamic>{
-        'action': 'evaluate',
-        'server': 'vhosts-dns-primary',
-        'timeout': '${activeProfile.timeoutMs}ms',
-      });
-      dnsRules.add(<String, dynamic>{
-        'match_response': true,
-        'ip_accept_any': true,
-        'action': 'respond',
-      });
-      dnsRules.add(<String, dynamic>{
-        'action': 'evaluate',
-        'server': 'vhosts-dns-secondary',
-        'timeout': '${activeProfile.timeoutMs}ms',
-      });
-      dnsRules.add(<String, dynamic>{
-        'match_response': true,
-        'action': 'respond',
-      });
-    }
-    final payload = <String, dynamic>{
-      'log': <String, dynamic>{'level': 'warn'},
-      'dns': <String, dynamic>{
-        'servers': dnsServers,
-        'rules': dnsRules,
-        'final': 'vhosts-dns-primary',
-        'strategy': _allowIpv6 ? 'prefer_ipv4' : 'ipv4_only',
-      },
-      'inbounds': <Map<String, dynamic>>[
-        <String, dynamic>{
-          'type': 'tun',
-          'tag': 'vhosts-tun',
-          'address': <String>[
-            '172.18.0.1/30',
-            if (_allowIpv6) 'fdfe:dcba:9876::1/126',
-          ],
-          'mtu': 1500,
-          'auto_route': true,
-          'strict_route': true,
-        },
-      ],
-      'outbounds': <Map<String, dynamic>>[
-        <String, dynamic>{'type': 'direct', 'tag': 'direct'},
-        <String, dynamic>{'type': 'block', 'tag': 'block'},
-      ],
-      'route': <String, dynamic>{
-        'auto_detect_interface': true,
-        'final': 'direct',
-      },
-    };
-    return jsonEncode(payload);
-  }
-
-  Map<String, dynamic>? _dnsRuleForHost(HostRule rule) {
-    final domain = _normalizeHostDomain(rule.domain);
-    final targetIp = rule.targetIp.trim();
-    if (domain.isEmpty || targetIp.isEmpty) {
-      return null;
-    }
-
-    final String matchField;
-    final String owner;
-    switch (rule.matchType) {
-      case HostMatchType.exact:
-        matchField = 'domain';
-        owner = domain;
-      case HostMatchType.suffix:
-        if (!domain.startsWith('*.') || domain.length <= 2) {
-          return null;
-        }
-        matchField = 'domain_suffix';
-        owner = '*${domain.substring(1)}';
-    }
-    final recordType = targetIp.contains(':') ? 'AAAA' : 'A';
-    return <String, dynamic>{
-      matchField: <String>[
-        matchField == 'domain' ? domain : owner.substring(1),
-      ],
-      'query_type': <String>[recordType],
-      'action': 'predefined',
-      'answer': <String>['$owner. IN $recordType $targetIp'],
-    };
-  }
-
-  Map<String, dynamic> _dnsServerForProfile(
-    DnsProfile profile, {
-    required String tag,
-  }) {
-    final server = profile.server.trim();
-    switch (profile.type) {
-      case DnsProfileType.system:
-        return <String, dynamic>{'type': 'local', 'tag': tag};
-      case DnsProfileType.plain:
-        final parsed = _parseHostPort(server, 53);
-        return <String, dynamic>{
-          'type': 'udp',
-          'tag': tag,
-          'server': parsed.host,
-          'server_port': parsed.port,
-          if (_isDomainName(parsed.host)) 'domain_resolver': 'vhosts-bootstrap',
-        };
-      case DnsProfileType.doh:
-        final uri = Uri.tryParse(server);
-        if (uri == null || uri.host.isEmpty) {
-          return <String, dynamic>{'type': 'local', 'tag': tag};
-        }
-        return <String, dynamic>{
-          'type': 'https',
-          'tag': tag,
-          'server': uri.host,
-          'server_port': uri.hasPort ? uri.port : 443,
-          'path': uri.path.isEmpty ? '/dns-query' : uri.path,
-          'tls': <String, dynamic>{'server_name': uri.host},
-          if (_isDomainName(uri.host)) 'domain_resolver': 'vhosts-bootstrap',
-        };
-      case DnsProfileType.dot:
-        final parsed = _parseHostPort(server, 853);
-        final hostname = profile.dotHostname.trim();
-        return <String, dynamic>{
-          'type': 'tls',
-          'tag': tag,
-          'server': parsed.host,
-          'server_port': parsed.port,
-          'tls': <String, dynamic>{
-            if (hostname.isNotEmpty) 'server_name': hostname,
-          },
-          if (_isDomainName(parsed.host)) 'domain_resolver': 'vhosts-bootstrap',
-        };
-    }
-  }
-
-  Map<String, dynamic>? _secondaryDnsServerForProfile(DnsProfile profile) {
-    final secondary = profile.secondaryServer.trim();
-    if (secondary.isEmpty || profile.type != DnsProfileType.plain) {
-      return null;
-    }
-    final parsed = _parseHostPort(secondary, 53);
-    return <String, dynamic>{
-      'type': 'udp',
-      'tag': 'vhosts-dns-secondary',
-      'server': parsed.host,
-      'server_port': parsed.port,
-      if (_isDomainName(parsed.host)) 'domain_resolver': 'vhosts-bootstrap',
-    };
-  }
-
-  bool _serverNeedsBootstrapResolver(Map<String, dynamic> server) {
-    return server['domain_resolver'] == 'vhosts-bootstrap';
-  }
-
-  bool _isDomainName(String value) {
-    final input = value.trim();
-    return input.isNotEmpty &&
-        !RegExp(r'^\[?([0-9a-fA-F:]+)\]?$').hasMatch(input) &&
-        !RegExp(r'^\d+(\.\d+){3}$').hasMatch(input);
-  }
-
-  String _normalizeHostDomain(String value) {
-    var domain = value.trim().toLowerCase();
-    if (domain.endsWith('.')) {
-      domain = domain.substring(0, domain.length - 1);
-    }
-    return domain;
-  }
-
-  ({String host, int port}) _parseHostPort(String value, int defaultPort) {
-    var input = value.trim();
-    if (input.startsWith('dns://')) {
-      input = input.substring(6);
-    }
-    if (input.startsWith('[')) {
-      final end = input.indexOf(']');
-      if (end > 0) {
-        final host = input.substring(1, end);
-        final port = end + 1 < input.length && input[end + 1] == ':'
-            ? int.tryParse(input.substring(end + 2)) ?? defaultPort
-            : defaultPort;
-        return (host: host, port: port);
-      }
-    }
-    final separator = input.lastIndexOf(':');
-    if (separator > 0 && input.indexOf(':') == separator) {
-      return (
-        host: input.substring(0, separator),
-        port: int.tryParse(input.substring(separator + 1)) ?? defaultPort,
-      );
-    }
-    return (host: input, port: defaultPort);
+    return DnsVpnPlatformService.test(_dnsProfiles[index]);
   }
 
   HostMatchType _matchTypeForDomain(String domain) {
@@ -613,52 +306,43 @@ class AppState extends ChangeNotifier {
     return HostMatchType.exact;
   }
 
-  void _normalizeActiveDnsProfiles({String? preferredId}) {
+  void _normalizeActiveDnsProfiles({String? selectedId}) {
     if (_dnsProfiles.isEmpty) {
       return;
     }
 
     final activeId =
-        preferredId ??
-        _activeDnsProfileId(_dnsProfiles) ??
-        _dnsProfiles.first.id;
+        selectedId ??
+        _dnsProfiles
+            .firstWhere(
+              (profile) => profile.enabled,
+              orElse: () => _dnsProfiles.first,
+            )
+            .id;
     _dnsProfiles = _dnsProfiles
         .map((profile) => profile.copyWith(enabled: profile.id == activeId))
         .toList(growable: false);
   }
 
   Future<void> _persist() async {
-    final activeDnsProfileId = _activeDnsProfileId(_dnsProfiles);
     final appStateJson = jsonEncode(<String, dynamic>{
-      'allowIpv6': _allowIpv6,
-      'activeDnsProfileId': activeDnsProfileId,
       'hostRules': _hostRules
           .map((rule) => rule.toJson())
           .toList(growable: false),
       'dnsProfiles': _dnsProfiles
+          .where((profile) => !isProtectedDnsProfile(profile.id))
           .map((profile) => profile.toJson())
           .toList(growable: false),
     });
     await AppStoragePlatformService.save(appStateJson);
   }
 
-  void _resetToDefaultConfiguration() {
+  void _setDefaultConfiguration() {
     _hostRules = const <HostRule>[];
     _dnsProfiles = _defaultDnsProfiles();
-    _allowIpv6 = true;
   }
 
-  Future<bool> _requestSingboxPermission() async {
-    try {
-      return await _singboxClient.requestVPNPermission();
-    } on PlatformException {
-      return false;
-    } on StateError {
-      return false;
-    }
-  }
-
-  void _applySingboxState(ServiceState state) {
+  void _applyVpnState(String state) {
     if (_disposed) {
       return;
     }
@@ -666,14 +350,16 @@ class AppState extends ChangeNotifier {
     final previousAuthorized = _vpnAuthorized;
     final previousStatus = _vpnStatus;
 
-    if (state == ServiceState.started) {
+    if (state == 'started') {
       _vpnAuthorized = true;
       _vpnStatus = VpnStatus.running;
-    } else if (state == ServiceState.starting) {
+    } else if (state == 'starting') {
       _vpnAuthorized = true;
       _vpnStatus = VpnStatus.starting;
-    } else if (state == ServiceState.stopping) {
+    } else if (state == 'stopping') {
       _vpnStatus = VpnStatus.stopping;
+    } else if (state == 'error') {
+      _vpnStatus = VpnStatus.error;
     } else {
       _vpnStatus = VpnStatus.idle;
     }
@@ -714,7 +400,4 @@ const DnsProfile _aliyunDefaultDnsProfile = DnsProfile(
   timeoutMs: 1500,
   retryCount: 2,
   enabled: true,
-  healthStatus: DnsHealthStatus.unknown,
-  healthDetail: '默认使用阿里云 DoH，由 sing-box 负责解析',
-  latencyMs: null,
 );

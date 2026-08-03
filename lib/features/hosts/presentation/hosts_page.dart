@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/widgets.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 
@@ -469,7 +471,7 @@ class _RuleEditorSheetState extends State<_RuleEditorSheet> {
       showVhostsToast(context, '域名或匹配类型格式不正确');
       return;
     }
-    if (Uri.tryParse('http://$ip')?.host.isEmpty ?? true) {
+    if (InternetAddress.tryParse(ip) == null) {
       showVhostsToast(context, '目标 IP 格式不正确');
       return;
     }

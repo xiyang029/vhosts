@@ -1,5 +1,3 @@
-import '../../../shared/utils/app_utils.dart';
-
 enum HostMatchType { exact, suffix }
 
 extension HostMatchTypeX on HostMatchType {
@@ -32,18 +30,14 @@ class HostRule {
 
   factory HostRule.fromJson(Map<String, dynamic> json) {
     return HostRule(
-      id: stringValue(json['id']),
-      domain: stringValue(json['domain']),
-      matchType: enumByName(
-        HostMatchType.values,
-        stringValue(json['matchType']),
-        HostMatchType.exact,
-      ),
-      targetIp: stringValue(json['targetIp']),
-      enabled: boolValue(json['enabled']),
-      note: stringValue(json['note']),
-      createdAt: dateTimeValue(json['createdAt']),
-      updatedAt: dateTimeValue(json['updatedAt']),
+      id: json['id'] as String,
+      domain: json['domain'] as String,
+      matchType: HostMatchType.values.byName(json['matchType'] as String),
+      targetIp: json['targetIp'] as String,
+      enabled: json['enabled'] as bool,
+      note: json['note'] as String,
+      createdAt: DateTime.parse(json['createdAt'] as String),
+      updatedAt: DateTime.parse(json['updatedAt'] as String),
     );
   }
 

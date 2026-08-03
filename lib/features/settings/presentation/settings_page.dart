@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 
-import '../../../app/app_state.dart';
 import '../../../app/app_theme.dart';
 import '../../../core/services/app_update_service.dart';
 
@@ -20,7 +19,6 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final app = AppScope.of(context);
     final theme = ShadTheme.of(context);
     final checkingUpdate = _checkingUpdate;
 
@@ -33,14 +31,6 @@ class _SettingsPageState extends State<SettingsPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _SettingsRow(
-                  icon: LucideIcons.network,
-                  title: '允许 IPv6',
-                  trailing: ShadSwitch(
-                    value: app.allowIpv6,
-                    onChanged: app.setAllowIpv6,
-                  ),
-                ),
                 _SettingsRow(
                   icon: LucideIcons.download,
                   title: checkingUpdate ? '检查中...' : '检查更新',

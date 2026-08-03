@@ -1,34 +1,47 @@
 package com.xiyang.vhosts
 
-import android.Manifest
 import android.content.Context
+import android.content.BroadcastReceiver
 import android.content.Intent
-import android.content.pm.PackageManager
+import android.content.IntentFilter
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.widget.Toast
-import androidx.activity.result.ActivityResultLauncher
-import androidx.activity.result.contract.ActivityResultContracts
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import org.json.JSONObject
+import java.util.concurrent.Executors
 
 class MainActivity : FlutterFragmentActivity() {
     private val appChannelName = "vhosts/app"
+    private val dnsChannelName = "vhosts/dns"
+    private val dnsEventChannelName = "vhosts/dns/events"
     private val installerChannelName = "vhosts/installer"
     private val toastChannelName = "vhosts/toast"
-    private var pendingNotificationPermissionResult: MethodChannel.Result? = null
-    private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
+    private var pendingVpnPermissionResult: MethodChannel.Result? = null
+    private var dnsEventSink: EventChannel.EventSink? = null
+    private val dnsExecutor = Executors.newCachedThreadPool()
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private val vpnStatusReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            dnsEventSink?.success(intent?.getStringExtra(DnsVpnService.EXTRA_STATUS))
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        notificationPermissionLauncher = registerForActivityResult(
-            ActivityResultContracts.RequestPermission(),
-        ) { granted ->
-            pendingNotificationPermissionResult?.success(granted)
-            pendingNotificationPermissionResult = null
-        }
+        registerReceiver(
+            vpnStatusReceiver,
+            IntentFilter(DnsVpnService.ACTION_STATUS),
+            RECEIVER_NOT_EXPORTED,
+        )
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -38,6 +51,10 @@ class MainActivity : FlutterFragmentActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "loadAppState" -> result.success(loadAppState())
+                    "getAppVersion" -> result.success(
+                        packageManager.getPackageInfo(packageName, 0).versionName.orEmpty(),
+                    )
+                    "getSupportedAbis" -> result.success(Build.SUPPORTED_ABIS.toList())
                     "saveAppState" -> {
                         saveAppState(call.argument<String>("stateJson").orEmpty())
                         result.success(true)
@@ -46,11 +63,44 @@ class MainActivity : FlutterFragmentActivity() {
                 }
             }
 
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, dnsChannelName)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "requestVpnPermission" -> requestVpnPermission(result)
+                    "startVpn" -> {
+                        val profile = call.argument<String>("profileJson").orEmpty()
+                        val rules = call.argument<String>("hostRulesJson").orEmpty()
+                        val serviceIntent = Intent(this, DnsVpnService::class.java)
+                            .setAction(DnsVpnService.ACTION_START)
+                            .putExtra(DnsVpnService.EXTRA_PROFILE, profile)
+                            .putExtra(DnsVpnService.EXTRA_RULES, rules)
+                        startForegroundService(serviceIntent)
+                        result.success(true)
+                    }
+                    "stopVpn" -> {
+                        startService(Intent(this, DnsVpnService::class.java).setAction(DnsVpnService.ACTION_STOP))
+                        result.success(true)
+                    }
+                    "testDns" -> testDns(call.argument<String>("profileJson").orEmpty(), result)
+                    else -> result.notImplemented()
+                }
+            }
+
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, dnsEventChannelName)
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    dnsEventSink = events
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    dnsEventSink = null
+                }
+            })
+
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, installerChannelName)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "canRequestPackageInstalls" -> result.success(canRequestPackageInstalls())
-                    "requestNotificationPermission" -> requestNotificationPermission(result)
                     "getDownloadDirectory" -> result.success(cacheDir.absolutePath)
                     "openInstallPermissionSettings" -> {
                         openInstallPermissionSettings()
@@ -78,24 +128,69 @@ class MainActivity : FlutterFragmentActivity() {
             }
     }
 
-    private fun canRequestPackageInstalls(): Boolean = packageManager.canRequestPackageInstalls()
-
-    private fun requestNotificationPermission(result: MethodChannel.Result) {
-        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
-            PackageManager.PERMISSION_GRANTED
-        ) {
+    private fun requestVpnPermission(result: MethodChannel.Result) {
+        if (pendingVpnPermissionResult != null) {
+            result.error("busy", "VPN permission request already in progress", null)
+            return
+        }
+        val prepareIntent = android.net.VpnService.prepare(this)
+        if (prepareIntent == null) {
             result.success(true)
             return
         }
-
-        if (pendingNotificationPermissionResult != null) {
-            result.error("busy", "Notification permission request already in progress", null)
-            return
-        }
-
-        pendingNotificationPermissionResult = result
-        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        pendingVpnPermissionResult = result
+        startActivityForResult(prepareIntent, VPN_PERMISSION_REQUEST_CODE)
     }
+
+    private fun testDns(profileJson: String, result: MethodChannel.Result) {
+        dnsExecutor.execute {
+            try {
+                val profile = DnsProfileConfig.fromJson(JSONObject(profileJson))
+                val network = underlyingNetwork()
+                val testResult = DnsTransport(profile = profile, network = network).test()
+                mainHandler.post { result.success(testResult.toMap()) }
+            } catch (error: Exception) {
+                mainHandler.post {
+                    result.success(
+                        mapOf(
+                            "success" to false,
+                            "latencyMs" to null,
+                            "detail" to (error.message ?: "DNS 配置无效"),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun underlyingNetwork(): android.net.Network? {
+        val connectivity = getSystemService(android.net.ConnectivityManager::class.java)
+        val candidate = connectivity.allNetworks.firstOrNull { network ->
+            val capabilities = connectivity.getNetworkCapabilities(network)
+            capabilities?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
+                capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN).not()
+        }
+        return candidate ?: connectivity.activeNetwork
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == VPN_PERMISSION_REQUEST_CODE) {
+            pendingVpnPermissionResult?.success(resultCode == RESULT_OK)
+            pendingVpnPermissionResult = null
+        }
+    }
+
+    override fun onDestroy() {
+        try {
+            unregisterReceiver(vpnStatusReceiver)
+        } catch (_: Exception) {
+        }
+        dnsExecutor.shutdownNow()
+        super.onDestroy()
+    }
+
+    private fun canRequestPackageInstalls(): Boolean = packageManager.canRequestPackageInstalls()
 
     private fun openInstallPermissionSettings() {
         startActivity(
@@ -120,7 +215,8 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     companion object {
-        private const val APP_PREFERENCES_NAME = "vhosts_app"
-        private const val KEY_APP_STATE_JSON = "app_state_json"
+        private const val VPN_PERMISSION_REQUEST_CODE = 7101
+        private const val APP_PREFERENCES_NAME = "vhosts_dns_state"
+        private const val KEY_APP_STATE_JSON = "state_json"
     }
 }

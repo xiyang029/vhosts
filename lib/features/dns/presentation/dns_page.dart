@@ -22,99 +22,51 @@ class _DnsPageState extends State<DnsPage> {
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
-    final activeProfile = app.activeDnsProfile;
+    final theme = ShadTheme.of(context);
 
     return SafeArea(
       child: ListView(
         padding: _pagePadding,
         children: [
-          ShadCard(
-            padding: _cardPadding,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _IconHeader(
-                  icon: activeProfile.type.icon,
-                  color: activeProfile.healthStatus.color,
-                  title: activeProfile.name,
-                  subtitle: activeProfile.type.label,
-                  iconSize: 44,
-                  iconRadius: 14,
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: ShadButton(
-                        onPressed: () async {
-                          final elapsedMs = await app.testDnsProfile(
-                            activeProfile.id,
-                          );
-                          if (!context.mounted) {
-                            return;
-                          }
-                          showVhostsToast(
-                            context,
-                            elapsedMs == null
-                                ? '${activeProfile.name} 测试失败'
-                                : '${activeProfile.name} 测试完成，$elapsedMs ms',
-                          );
-                        },
-                        leading: const Icon(LucideIcons.bolt),
-                        child: const Text('测试'),
-                      ),
-                    ),
-                    if (!app.isProtectedDnsProfile(activeProfile.id)) ...[
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: ShadButton.outline(
-                          onPressed: () =>
-                              _openProfileEditor(existing: activeProfile),
-                          leading: const Icon(LucideIcons.pencil),
-                          child: const Text('编辑'),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ],
-            ),
+          Row(
+            children: [
+              Expanded(child: Text('DNS 配置', style: theme.textTheme.large)),
+              ShadButton(
+                onPressed: () => _openProfileEditor(),
+                leading: const Icon(LucideIcons.plus),
+                child: const Text('新增配置'),
+              ),
+            ],
           ),
           const SizedBox(height: 14),
-          ShadCard(
-            padding: _cardPadding,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Expanded(child: Text('配置列表')),
-                    ShadButton.ghost(
-                      onPressed: () => _openProfileEditor(),
-                      child: const Icon(LucideIcons.circlePlus),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                ...app.dnsProfiles.map(
-                  (profile) => Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: _DnsProfileCard(
-                      profile: profile,
-                      isProtected: app.isProtectedDnsProfile(profile.id),
-                      onActivate: () {
-                        app.setActiveDnsProfile(profile.id);
-                      },
-                      onEdit: () => _openProfileEditor(existing: profile),
-                      onDelete: () => _confirmDeleteProfile(profile),
-                    ),
-                  ),
-                ),
-              ],
+          ...app.dnsProfiles.map(
+            (profile) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _DnsProfileCard(
+                profile: profile,
+                isProtected: app.isProtectedDnsProfile(profile.id),
+                onTest: () => _testProfile(profile),
+                onActivate: () => app.setActiveDnsProfile(profile.id),
+                onEdit: () => _openProfileEditor(existing: profile),
+                onDelete: () => _confirmDeleteProfile(profile),
+              ),
             ),
           ),
         ],
       ),
+    );
+  }
+
+  Future<void> _testProfile(DnsProfile profile) async {
+    final result = await AppScope.of(context).testDnsProfile(profile.id);
+    if (!mounted) {
+      return;
+    }
+    showVhostsToast(
+      context,
+      result == null || !result.success
+          ? '${profile.name} 测试失败：${result?.detail ?? '平台不支持'}'
+          : '${profile.name} 测试完成，${result.latencyMs} ms',
     );
   }
 
@@ -171,6 +123,7 @@ class _DnsProfileCard extends StatelessWidget {
   const _DnsProfileCard({
     required this.profile,
     required this.isProtected,
+    required this.onTest,
     required this.onActivate,
     required this.onEdit,
     required this.onDelete,
@@ -178,12 +131,14 @@ class _DnsProfileCard extends StatelessWidget {
 
   final DnsProfile profile;
   final bool isProtected;
+  final VoidCallback onTest;
   final VoidCallback onActivate;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
+    final theme = ShadTheme.of(context);
     return ShadCard(
       padding: _cardPadding,
       child: Column(
@@ -195,73 +150,68 @@ class _DnsProfileCard extends StatelessWidget {
               Expanded(
                 child: _IconHeader(
                   icon: profile.type.icon,
-                  color: profile.healthStatus.color,
+                  color: theme.colorScheme.primary,
                   title: profile.name,
                   subtitle: profile.type.label,
                   iconSize: 42,
                   iconRadius: 14,
                 ),
               ),
-              ShadBadge.outline(
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      profile.enabled
-                          ? LucideIcons.circleCheck
-                          : LucideIcons.circlePause,
-                      size: 14,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(profile.enabled ? '启用中' : '待命'),
-                  ],
-                ),
-              ),
             ],
           ),
           const SizedBox(height: 12),
-          _InfoItem(label: '主服务器', value: profile.server),
-          const SizedBox(height: 12),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
+          Text(
+            profile.server,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.muted,
+          ),
+          const SizedBox(height: 10),
+          if (profile.type == DnsProfileType.dot &&
+              profile.dotHostname.isNotEmpty)
+            Text(
+              'TLS 主机名：${profile.dotHostname}',
+              style: theme.textTheme.muted,
+            ),
+          if (profile.type == DnsProfileType.plain &&
+              profile.secondaryServer.isNotEmpty)
+            Text(
+              '备用服务器：${profile.secondaryServer}',
+              style: theme.textTheme.muted,
+            ),
+          const SizedBox(height: 10),
+          Wrap(
+            alignment: WrapAlignment.end,
+            spacing: 4,
+            runSpacing: 4,
             children: [
-              ShadTooltip(
-                builder: (context) => Text(profile.enabled ? '已激活' : '激活'),
-                child: ShadButton.ghost(
-                  width: 40,
-                  height: 40,
-                  padding: EdgeInsets.zero,
-                  enabled: !profile.enabled,
+              if (profile.enabled)
+                ShadButton.ghost(
+                  enabled: false,
+                  leading: const Icon(LucideIcons.circleCheck),
+                  child: const Text('已启用'),
+                )
+              else
+                ShadButton.ghost(
                   onPressed: onActivate,
-                  child: Icon(
-                    profile.enabled ? LucideIcons.circleCheck : LucideIcons.zap,
-                    size: 18,
-                    color: profile.enabled ? vhostsSuccess : null,
-                  ),
+                  leading: const Icon(LucideIcons.zap),
+                  child: const Text('启用'),
                 ),
+              ShadButton.ghost(
+                onPressed: onTest,
+                leading: const Icon(LucideIcons.bolt),
+                child: const Text('测试'),
               ),
               if (!isProtected) ...[
-                const SizedBox(width: 4),
-                ShadTooltip(
-                  builder: (context) => const Text('编辑'),
-                  child: ShadButton.ghost(
-                    width: 40,
-                    height: 40,
-                    padding: EdgeInsets.zero,
-                    onPressed: onEdit,
-                    child: const Icon(LucideIcons.pencil, size: 18),
-                  ),
+                ShadButton.ghost(
+                  onPressed: onEdit,
+                  leading: const Icon(LucideIcons.pencil),
+                  child: const Text('编辑'),
                 ),
-                const SizedBox(width: 4),
-                ShadTooltip(
-                  builder: (context) => const Text('删除'),
-                  child: ShadButton.ghost(
-                    width: 40,
-                    height: 40,
-                    padding: EdgeInsets.zero,
-                    onPressed: onDelete,
-                    child: const Icon(LucideIcons.trash2, size: 18),
-                  ),
+                ShadButton.ghost(
+                  onPressed: onDelete,
+                  leading: const Icon(LucideIcons.trash2),
+                  child: const Text('删除'),
                 ),
               ],
             ],
@@ -385,7 +335,7 @@ class _ProfileEditorSheetState extends State<_ProfileEditorSheet> {
                 label: '备用服务器',
                 child: ShadInput(
                   controller: _secondaryController,
-                  placeholder: const Text('可选，例如 223.6.6.6:53'),
+                  placeholder: const Text('可选，例如 223.6.6.6（默认端口 53）'),
                 ),
               ),
             ] else if (_type == DnsProfileType.dot) ...[
@@ -501,9 +451,6 @@ class _ProfileEditorSheetState extends State<_ProfileEditorSheet> {
         timeoutMs: timeoutMs,
         retryCount: retryCount,
         enabled: _enabled,
-        healthStatus: widget.existing?.healthStatus ?? DnsHealthStatus.unknown,
-        healthDetail: widget.existing?.healthDetail ?? '新建配置，等待健康检查',
-        latencyMs: widget.existing?.latencyMs,
       ),
     );
   }
@@ -563,34 +510,6 @@ class _IconHeader extends StatelessWidget {
   }
 }
 
-class _InfoItem extends StatelessWidget {
-  const _InfoItem({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = ShadTheme.of(context);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(width: 84, child: Text(label, style: theme.textTheme.muted)),
-          Expanded(
-            child: Text(
-              value,
-              textAlign: TextAlign.end,
-              style: theme.textTheme.p,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 const List<DnsProfileType> _editableDnsProfileTypes = [
   DnsProfileType.doh,
   DnsProfileType.plain,
@@ -602,7 +521,6 @@ bool _isValidServerForType(String value, DnsProfileType type) {
     DnsProfileType.plain => hasUriHost(value, scheme: 'dns'),
     DnsProfileType.doh => _isValidDohUrl(value),
     DnsProfileType.dot => hasUriHost(value, scheme: 'dot'),
-    DnsProfileType.system => true,
   };
 }
 
@@ -613,10 +531,9 @@ bool _isValidDohUrl(String value) {
 
 String _serverHintText(DnsProfileType type) {
   return switch (type) {
-    DnsProfileType.plain => '例如 223.5.5.5 或 223.5.5.5:53',
+    DnsProfileType.plain => '例如 223.5.5.5（默认端口 53）',
     DnsProfileType.doh => 'https://dns.example.com/dns-query',
-    DnsProfileType.dot => '例如 1.1.1.1:853',
-    DnsProfileType.system => '系统 DNS',
+    DnsProfileType.dot => '例如 1.1.1.1（默认端口 853）',
   };
 }
 
@@ -625,6 +542,5 @@ String _serverLabelText(DnsProfileType type) {
     DnsProfileType.plain => '主服务器',
     DnsProfileType.doh => 'DoH URL',
     DnsProfileType.dot => 'DoT 服务器',
-    DnsProfileType.system => '系统 DNS',
   };
 }
