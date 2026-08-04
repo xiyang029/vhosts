@@ -28,7 +28,7 @@ class HostRule {
   final DateTime createdAt;
   final DateTime updatedAt;
 
-  factory HostRule.fromJson(Map<String, dynamic> json) {
+  factory HostRule.fromJson(Map<dynamic, dynamic> json) {
     return HostRule(
       id: json['id'] as String,
       domain: json['domain'] as String,
@@ -38,28 +38,6 @@ class HostRule {
       note: json['note'] as String,
       createdAt: DateTime.parse(json['createdAt'] as String),
       updatedAt: DateTime.parse(json['updatedAt'] as String),
-    );
-  }
-
-  HostRule copyWith({
-    String? id,
-    String? domain,
-    HostMatchType? matchType,
-    String? targetIp,
-    bool? enabled,
-    String? note,
-    DateTime? createdAt,
-    DateTime? updatedAt,
-  }) {
-    return HostRule(
-      id: id ?? this.id,
-      domain: domain ?? this.domain,
-      matchType: matchType ?? this.matchType,
-      targetIp: targetIp ?? this.targetIp,
-      enabled: enabled ?? this.enabled,
-      note: note ?? this.note,
-      createdAt: createdAt ?? this.createdAt,
-      updatedAt: updatedAt ?? this.updatedAt,
     );
   }
 

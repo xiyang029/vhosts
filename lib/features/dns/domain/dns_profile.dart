@@ -40,7 +40,7 @@ class DnsProfile {
   final int retryCount;
   final bool enabled;
 
-  factory DnsProfile.fromJson(Map<String, dynamic> json) {
+  factory DnsProfile.fromJson(Map<dynamic, dynamic> json) {
     return DnsProfile(
       id: json['id'] as String,
       name: json['name'] as String,
@@ -51,30 +51,6 @@ class DnsProfile {
       timeoutMs: (json['timeoutMs'] as num).toInt(),
       retryCount: (json['retryCount'] as num).toInt(),
       enabled: json['enabled'] as bool,
-    );
-  }
-
-  DnsProfile copyWith({
-    String? id,
-    String? name,
-    DnsProfileType? type,
-    String? server,
-    String? secondaryServer,
-    String? dotHostname,
-    int? timeoutMs,
-    int? retryCount,
-    bool? enabled,
-  }) {
-    return DnsProfile(
-      id: id ?? this.id,
-      name: name ?? this.name,
-      type: type ?? this.type,
-      server: server ?? this.server,
-      secondaryServer: secondaryServer ?? this.secondaryServer,
-      dotHostname: dotHostname ?? this.dotHostname,
-      timeoutMs: timeoutMs ?? this.timeoutMs,
-      retryCount: retryCount ?? this.retryCount,
-      enabled: enabled ?? this.enabled,
     );
   }
 

@@ -161,7 +161,7 @@ class _DnsProfileCard extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            profile.server,
+            '主服务器：${profile.server}',
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: theme.textTheme.muted,
@@ -179,11 +179,8 @@ class _DnsProfileCard extends StatelessWidget {
               '备用服务器：${profile.secondaryServer}',
               style: theme.textTheme.muted,
             ),
-          const SizedBox(height: 10),
           Wrap(
-            alignment: WrapAlignment.end,
-            spacing: 4,
-            runSpacing: 4,
+            alignment: WrapAlignment.start,
             children: [
               if (profile.enabled)
                 ShadButton.ghost(

@@ -11,8 +11,18 @@ import '../features/dns/domain/dns_profile.dart';
 import '../features/hosts/domain/host_rule.dart';
 
 const String aliyunDefaultDnsProfileId = 'dp_default_alidns';
+const String googlePlainDefaultDnsProfileId = 'dp_default_google_plain';
+const String cloudflarePlainDefaultDnsProfileId = 'dp_default_cloudflare_plain';
+const String aliyunPlainDefaultDnsProfileId = 'dp_default_alidns_plain';
+const String dns114PlainDefaultDnsProfileId = 'dp_default_114_plain';
 
-const Set<String> _protectedDnsProfileIds = <String>{aliyunDefaultDnsProfileId};
+const Set<String> _protectedDnsProfileIds = <String>{
+  aliyunDefaultDnsProfileId,
+  googlePlainDefaultDnsProfileId,
+  cloudflarePlainDefaultDnsProfileId,
+  aliyunPlainDefaultDnsProfileId,
+  dns114PlainDefaultDnsProfileId,
+};
 
 class AppScope extends InheritedNotifier<AppState> {
   const AppScope({
@@ -28,7 +38,13 @@ class AppScope extends InheritedNotifier<AppState> {
   }
 }
 
-List<DnsProfile> _defaultDnsProfiles() => const [_aliyunDefaultDnsProfile];
+List<DnsProfile> _defaultDnsProfiles() => const [
+  _aliyunDefaultDnsProfile,
+  _aliyunPlainDefaultDnsProfile,
+  _cloudflarePlainDefaultDnsProfile,
+  _googlePlainDefaultDnsProfile,
+  _dns114PlainDefaultDnsProfile,
+];
 
 List<T> _replaceOrPrepend<T>(
   List<T> items,
@@ -43,6 +59,33 @@ List<T> _replaceOrPrepend<T>(
   final next = [...items];
   next[index] = value;
   return next;
+}
+
+HostRule _hostRuleWithEnabled(HostRule rule, bool enabled, DateTime updatedAt) {
+  return HostRule(
+    id: rule.id,
+    domain: rule.domain,
+    matchType: rule.matchType,
+    targetIp: rule.targetIp,
+    enabled: enabled,
+    note: rule.note,
+    createdAt: rule.createdAt,
+    updatedAt: updatedAt,
+  );
+}
+
+DnsProfile _dnsProfileWithEnabled(DnsProfile profile, bool enabled) {
+  return DnsProfile(
+    id: profile.id,
+    name: profile.name,
+    type: profile.type,
+    server: profile.server,
+    secondaryServer: profile.secondaryServer,
+    dotHostname: profile.dotHostname,
+    timeoutMs: profile.timeoutMs,
+    retryCount: profile.retryCount,
+    enabled: enabled,
+  );
 }
 
 class AppState extends ChangeNotifier {
@@ -121,19 +164,14 @@ class AppState extends ChangeNotifier {
         throw const FormatException('Invalid root payload');
       }
 
-      final root = Map<String, dynamic>.from(decoded);
+      final root = decoded;
       final hostRulesJson = root['hostRules'] as List<dynamic>;
       final dnsProfilesJson = root['dnsProfiles'] as List<dynamic>;
       _hostRules = hostRulesJson
-          .map(
-            (item) => HostRule.fromJson(Map<String, dynamic>.from(item as Map)),
-          )
+          .map((item) => HostRule.fromJson(item as Map))
           .toList(growable: false);
       final storedProfiles = dnsProfilesJson
-          .map(
-            (item) =>
-                DnsProfile.fromJson(Map<String, dynamic>.from(item as Map)),
-          )
+          .map((item) => DnsProfile.fromJson(item as Map))
           .where((profile) => !isProtectedDnsProfile(profile.id));
       _dnsProfiles = [..._defaultDnsProfiles(), ...storedProfiles];
       _normalizeActiveDnsProfiles();
@@ -204,56 +242,14 @@ class AppState extends ChangeNotifier {
     if (index < 0) {
       return;
     }
-    _hostRules[index] = _hostRules[index].copyWith(
-      enabled: enabled,
-      updatedAt: DateTime.now(),
-    );
+    final rule = _hostRules[index];
+    if (rule.enabled == enabled) {
+      return;
+    }
+
+    _hostRules[index] = _hostRuleWithEnabled(rule, enabled, DateTime.now());
     unawaited(_persist());
     notifyListeners();
-  }
-
-  int importHostsText(String text) {
-    final now = DateTime.now();
-    final importedRules = <HostRule>[];
-
-    for (final rawLine in text.split(RegExp(r'[\r\n]+'))) {
-      final line = rawLine.trim();
-      if (line.isEmpty || line.startsWith('#')) {
-        continue;
-      }
-
-      final parts = line
-          .split(RegExp(r'\s+'))
-          .where((item) => item.isNotEmpty)
-          .toList(growable: false);
-      if (parts.length < 2) {
-        continue;
-      }
-
-      final ip = parts.first;
-      for (final domain in parts.skip(1)) {
-        importedRules.add(
-          HostRule(
-            id: 'hr_${now.microsecondsSinceEpoch}_${importedRules.length + 1}',
-            domain: domain,
-            matchType: _matchTypeForDomain(domain),
-            targetIp: ip,
-            enabled: true,
-            note: '',
-            createdAt: now,
-            updatedAt: now,
-          ),
-        );
-      }
-    }
-
-    if (importedRules.isNotEmpty) {
-      _hostRules = [...importedRules, ..._hostRules];
-      unawaited(_persist());
-      notifyListeners();
-    }
-
-    return importedRules.length;
   }
 
   void upsertDnsProfile(DnsProfile profile) {
@@ -273,7 +269,10 @@ class AppState extends ChangeNotifier {
   }
 
   void setActiveDnsProfile(String id) {
-    _normalizeActiveDnsProfiles(selectedId: id);
+    if (!_normalizeActiveDnsProfiles(selectedId: id)) {
+      return;
+    }
+
     unawaited(_persist());
     notifyListeners();
   }
@@ -299,29 +298,35 @@ class AppState extends ChangeNotifier {
     return DnsVpnPlatformService.test(_dnsProfiles[index]);
   }
 
-  HostMatchType _matchTypeForDomain(String domain) {
-    if (domain.startsWith('*.')) {
-      return HostMatchType.suffix;
-    }
-    return HostMatchType.exact;
-  }
-
-  void _normalizeActiveDnsProfiles({String? selectedId}) {
+  bool _normalizeActiveDnsProfiles({String? selectedId}) {
     if (_dnsProfiles.isEmpty) {
-      return;
+      return false;
     }
 
-    final activeId =
-        selectedId ??
-        _dnsProfiles
-            .firstWhere(
-              (profile) => profile.enabled,
-              orElse: () => _dnsProfiles.first,
-            )
-            .id;
-    _dnsProfiles = _dnsProfiles
-        .map((profile) => profile.copyWith(enabled: profile.id == activeId))
-        .toList(growable: false);
+    final selectedExists =
+        selectedId != null &&
+        _dnsProfiles.any((profile) => profile.id == selectedId);
+    final activeId = selectedExists
+        ? selectedId
+        : _dnsProfiles
+              .firstWhere(
+                (profile) => profile.enabled,
+                orElse: () => _dnsProfiles.first,
+              )
+              .id;
+    var changed = false;
+    for (var index = 0; index < _dnsProfiles.length; index += 1) {
+      final profile = _dnsProfiles[index];
+      final enabled = profile.id == activeId;
+      if (profile.enabled == enabled) {
+        continue;
+      }
+
+      _dnsProfiles[index] = _dnsProfileWithEnabled(profile, enabled);
+      changed = true;
+    }
+
+    return changed;
   }
 
   Future<void> _persist() async {
@@ -400,4 +405,52 @@ const DnsProfile _aliyunDefaultDnsProfile = DnsProfile(
   timeoutMs: 1500,
   retryCount: 2,
   enabled: true,
+);
+
+const DnsProfile _aliyunPlainDefaultDnsProfile = DnsProfile(
+  id: aliyunPlainDefaultDnsProfileId,
+  name: '阿里云 DNS (Plain)',
+  type: DnsProfileType.plain,
+  server: '223.5.5.5',
+  secondaryServer: '223.6.6.6',
+  dotHostname: '',
+  timeoutMs: 1500,
+  retryCount: 2,
+  enabled: false,
+);
+
+const DnsProfile _cloudflarePlainDefaultDnsProfile = DnsProfile(
+  id: cloudflarePlainDefaultDnsProfileId,
+  name: 'Cloudflare DNS',
+  type: DnsProfileType.plain,
+  server: '1.1.1.1',
+  secondaryServer: '1.0.0.1',
+  dotHostname: '',
+  timeoutMs: 1500,
+  retryCount: 2,
+  enabled: false,
+);
+
+const DnsProfile _googlePlainDefaultDnsProfile = DnsProfile(
+  id: googlePlainDefaultDnsProfileId,
+  name: 'Google DNS',
+  type: DnsProfileType.plain,
+  server: '8.8.8.8',
+  secondaryServer: '8.8.4.4',
+  dotHostname: '',
+  timeoutMs: 1500,
+  retryCount: 2,
+  enabled: false,
+);
+
+const DnsProfile _dns114PlainDefaultDnsProfile = DnsProfile(
+  id: dns114PlainDefaultDnsProfileId,
+  name: '114 DNS',
+  type: DnsProfileType.plain,
+  server: '114.114.114.114',
+  secondaryServer: '114.114.115.115',
+  dotHostname: '',
+  timeoutMs: 1500,
+  retryCount: 2,
+  enabled: false,
 );

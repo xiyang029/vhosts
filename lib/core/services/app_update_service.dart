@@ -30,6 +30,8 @@ class AppUpdateService {
   static final Uri _latestReleaseUri = Uri.parse(
     'https://api.github.com/repos/xiyang029/vhosts/releases/latest',
   );
+  static const String _androidAbi = 'arm64-v8a';
+  static const String _releaseApkName = 'app-arm64-v8a-release.apk';
   static Future<void>? _activeCheck;
 
   Future<void> checkForUpdates(
@@ -80,7 +82,7 @@ class AppUpdateService {
             builder: (dialogContext) => ShadDialog.alert(
               title: const Text('发现新版本'),
               description: Text(
-                '当前版本 $currentVersion，最新版本 ${release.version}。\n是否立即下载并安装对应 ABI 的 APK？',
+                '当前版本 $currentVersion，最新版本 ${release.version}。\n是否立即下载并安装 arm64-v8a APK？',
               ),
               actions: [
                 ShadButton.outline(
@@ -124,8 +126,8 @@ class AppUpdateService {
     final Map<String, dynamic> data =
         json.decode(await utf8.decodeStream(response)) as Map<String, dynamic>;
     final assets = data['assets'] as List<dynamic>? ?? const [];
-    final abi = await _resolveAndroidAbi();
-    final apkAsset = _selectApkAsset(assets, abi);
+    await _ensureArm64V8aSupported();
+    final apkAsset = _selectApkAsset(assets);
     final version = (data['tag_name'] as String?)?.trim().takeIfNotEmpty();
     final releaseVersion =
         version ?? (throw const FormatException('Release tag_name is missing'));
@@ -133,7 +135,7 @@ class AppUpdateService {
     return AppReleaseInfo(
       version: releaseVersion,
       apkUrl: apkAsset['browser_download_url'] as String,
-      fileName: _buildLocalApkFileName(releaseVersion, abi),
+      fileName: _buildLocalApkFileName(releaseVersion),
     );
   }
 
@@ -223,57 +225,32 @@ class AppUpdateService {
     return response;
   }
 
-  Future<String> _resolveAndroidAbi() async {
-    const supportedOrder = <String>['arm64-v8a', 'armeabi-v7a', 'x86_64'];
+  Future<void> _ensureArm64V8aSupported() async {
     final supportedAbis = await AppInfoPlatformService.getSupportedAbis();
-
-    for (final abi in supportedOrder) {
-      if (supportedAbis.contains(abi)) {
-        return abi;
-      }
+    if (supportedAbis.contains(_androidAbi)) {
+      return;
     }
 
-    if (supportedAbis.isNotEmpty) {
-      return supportedAbis.first;
+    if (supportedAbis.isEmpty) {
+      throw StateError('无法识别当前设备 ABI');
     }
 
-    throw StateError('无法识别当前设备 ABI');
+    throw StateError('当前设备不支持 $_androidAbi ABI');
   }
 
-  Map<String, dynamic> _selectApkAsset(List<dynamic> assets, String abi) {
-    final typedAssets = assets
-        .whereType<Map>()
-        .map((asset) => Map<String, dynamic>.from(asset))
-        .where((asset) {
-          final name = asset['name'] as String? ?? '';
-          return name.toLowerCase().endsWith('.apk');
-        })
-        .toList(growable: false);
-
-    final exactName = _defaultApkNameForAbi(abi);
-    for (final asset in typedAssets) {
-      if (asset['name'] == exactName) {
+  Map<dynamic, dynamic> _selectApkAsset(List<dynamic> assets) {
+    for (final asset in assets.whereType<Map>()) {
+      if (asset['name'] == _releaseApkName) {
         return asset;
       }
     }
 
-    for (final asset in typedAssets) {
-      final name = asset['name'] as String? ?? '';
-      if (name.contains(abi)) {
-        return asset;
-      }
-    }
-
-    throw FormatException('APK asset for ABI $abi not found');
+    throw FormatException('APK asset $_releaseApkName not found');
   }
 
-  String _defaultApkNameForAbi(String abi) {
-    return 'app-$abi-release.apk';
-  }
-
-  String _buildLocalApkFileName(String version, String abi) {
+  String _buildLocalApkFileName(String version) {
     final safeVersion = version.replaceAll(RegExp(r'[^0-9A-Za-z._-]'), '_');
-    return 'vhosts-$safeVersion-$abi.apk';
+    return 'vhosts-$safeVersion-$_androidAbi.apk';
   }
 
   bool _isVersionNewer(String latest, String current) {

@@ -87,29 +87,17 @@ class _HostsPageState extends State<HostsPage> {
             ),
           ),
           const SizedBox(height: 14),
-          Row(
-            children: [
-              Expanded(
-                child: ShadButton(
-                  onPressed: _openRuleEditor,
-                  leading: const Icon(LucideIcons.plus),
-                  child: const Text('新增规则'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: ShadButton.outline(
-                  onPressed: _openImportSheet,
-                  leading: const Icon(LucideIcons.fileUp),
-                  child: const Text('导入'),
-                ),
-              ),
-            ],
+          SizedBox(
+            width: double.infinity,
+            child: ShadButton(
+              onPressed: _openRuleEditor,
+              leading: const Icon(LucideIcons.plus),
+              child: const Text('新增规则'),
+            ),
           ),
           const SizedBox(height: 14),
           if (_filteredRules.isEmpty)
             ShadCard(
-              padding: _cardPadding,
               child: Center(child: Text('没有找到规则', style: theme.textTheme.p)),
             )
           else
@@ -144,26 +132,6 @@ class _HostsPageState extends State<HostsPage> {
     }
 
     app.upsertHostRule(result);
-  }
-
-  Future<void> _openImportSheet() async {
-    final app = AppScope.of(context);
-    final result = await showShadSheet<String>(
-      context: context,
-      side: ShadSheetSide.bottom,
-      builder: (context) => const _HostsImportSheet(),
-    );
-
-    if (result == null || result.trim().isEmpty) {
-      return;
-    }
-
-    final imported = app.importHostsText(result);
-    if (!mounted) {
-      return;
-    }
-
-    showVhostsToast(context, '已导入 $imported 条规则');
   }
 
   Future<void> _confirmDeleteRule(HostRule rule) async {
@@ -297,49 +265,6 @@ class _RuleEditorSheet extends StatefulWidget {
 
   @override
   State<_RuleEditorSheet> createState() => _RuleEditorSheetState();
-}
-
-class _HostsImportSheet extends StatefulWidget {
-  const _HostsImportSheet();
-
-  @override
-  State<_HostsImportSheet> createState() => _HostsImportSheetState();
-}
-
-class _HostsImportSheetState extends State<_HostsImportSheet> {
-  final TextEditingController _controller = TextEditingController();
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return ShadSheet(
-      title: const Text('导入 Hosts'),
-      constraints: const BoxConstraints(maxWidth: 560),
-      actions: [
-        ShadButton(
-          onPressed: () => Navigator.of(context).pop(_controller.text),
-          child: const Text('导入'),
-        ),
-      ],
-      child: Padding(
-        padding: _sheetContentPadding,
-        child: LabeledField(
-          label: 'Hosts 内容',
-          child: ShadTextarea(
-            controller: _controller,
-            minHeight: 180,
-            maxHeight: 320,
-            placeholder: const Text('每行一条：IP 域名1 域名2 ...'),
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 class _RuleEditorSheetState extends State<_RuleEditorSheet> {
@@ -517,6 +442,6 @@ String _domainHintText(HostMatchType matchType) {
 String _matchTypeHelpText(HostMatchType matchType) {
   return switch (matchType) {
     HostMatchType.exact => '精确匹配：直接填写完整域名，例如 example.com',
-    HostMatchType.suffix => '后缀匹配：必须以 *. 开头，例如 *.example.com',
+    HostMatchType.suffix => '后缀匹配：必须以 *. 开头，只匹配子域，不匹配根域，例如 *.example.com',
   };
 }
