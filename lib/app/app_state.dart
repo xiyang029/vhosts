@@ -9,15 +9,14 @@ import '../core/platform/dns_vpn_platform_service.dart';
 import '../core/platform/vpn_status.dart';
 import '../features/dns/domain/dns_profile.dart';
 import '../features/hosts/domain/host_rule.dart';
+import '../shared/utils/app_utils.dart';
 
-const String aliyunDefaultDnsProfileId = 'dp_default_alidns';
 const String googlePlainDefaultDnsProfileId = 'dp_default_google_plain';
 const String cloudflarePlainDefaultDnsProfileId = 'dp_default_cloudflare_plain';
 const String aliyunPlainDefaultDnsProfileId = 'dp_default_alidns_plain';
 const String dns114PlainDefaultDnsProfileId = 'dp_default_114_plain';
 
 const Set<String> _protectedDnsProfileIds = <String>{
-  aliyunDefaultDnsProfileId,
   googlePlainDefaultDnsProfileId,
   cloudflarePlainDefaultDnsProfileId,
   aliyunPlainDefaultDnsProfileId,
@@ -39,7 +38,6 @@ class AppScope extends InheritedNotifier<AppState> {
 }
 
 List<DnsProfile> _defaultDnsProfiles() => const [
-  _aliyunDefaultDnsProfile,
   _aliyunPlainDefaultDnsProfile,
   _cloudflarePlainDefaultDnsProfile,
   _googlePlainDefaultDnsProfile,
@@ -78,10 +76,8 @@ DnsProfile _dnsProfileWithEnabled(DnsProfile profile, bool enabled) {
   return DnsProfile(
     id: profile.id,
     name: profile.name,
-    type: profile.type,
     server: profile.server,
     secondaryServer: profile.secondaryServer,
-    dotHostname: profile.dotHostname,
     timeoutMs: profile.timeoutMs,
     retryCount: profile.retryCount,
     enabled: enabled,
@@ -125,6 +121,19 @@ class AppState extends ChangeNotifier {
       (profile) => profile.enabled,
       orElse: () => _dnsProfiles.first,
     );
+  }
+
+  String? get _activeDnsProfileId {
+    if (_dnsProfiles.isEmpty) {
+      return null;
+    }
+
+    return _dnsProfiles
+        .firstWhere(
+          (profile) => profile.enabled,
+          orElse: () => _dnsProfiles.first,
+        )
+        .id;
   }
 
   Future<void> toggleVpn() async {
@@ -172,9 +181,14 @@ class AppState extends ChangeNotifier {
           .toList(growable: false);
       final storedProfiles = dnsProfilesJson
           .map((item) => DnsProfile.fromJson(item as Map))
-          .where((profile) => !isProtectedDnsProfile(profile.id));
+          .where((profile) => !isProtectedDnsProfile(profile.id))
+          // 旧版本可能存过 DoH/DoT 配置，其 server 是 URL，不再可用。
+          .where((profile) => hasUriHost(profile.server, scheme: 'dns'));
       _dnsProfiles = [..._defaultDnsProfiles(), ...storedProfiles];
-      _normalizeActiveDnsProfiles();
+      // 默认 DNS 条目不写入存储，只有记录了当前选中项才能还原上次的选择。
+      _normalizeActiveDnsProfiles(
+        selectedId: root['activeDnsProfileId'] as String?,
+      );
     } catch (_) {
       _setDefaultConfiguration();
     }
@@ -331,6 +345,7 @@ class AppState extends ChangeNotifier {
 
   Future<void> _persist() async {
     final appStateJson = jsonEncode(<String, dynamic>{
+      'activeDnsProfileId': _activeDnsProfileId,
       'hostRules': _hostRules
           .map((rule) => rule.toJson())
           .toList(growable: false),
@@ -395,37 +410,21 @@ class AppState extends ChangeNotifier {
   }
 }
 
-const DnsProfile _aliyunDefaultDnsProfile = DnsProfile(
-  id: aliyunDefaultDnsProfileId,
+const DnsProfile _aliyunPlainDefaultDnsProfile = DnsProfile(
+  id: aliyunPlainDefaultDnsProfileId,
   name: '阿里云 DNS',
-  type: DnsProfileType.doh,
-  server: 'https://dns.alidns.com/dns-query',
-  secondaryServer: '',
-  dotHostname: '',
+  server: '223.5.5.5',
+  secondaryServer: '223.6.6.6',
   timeoutMs: 1500,
   retryCount: 2,
   enabled: true,
 );
 
-const DnsProfile _aliyunPlainDefaultDnsProfile = DnsProfile(
-  id: aliyunPlainDefaultDnsProfileId,
-  name: '阿里云 DNS (Plain)',
-  type: DnsProfileType.plain,
-  server: '223.5.5.5',
-  secondaryServer: '223.6.6.6',
-  dotHostname: '',
-  timeoutMs: 1500,
-  retryCount: 2,
-  enabled: false,
-);
-
 const DnsProfile _cloudflarePlainDefaultDnsProfile = DnsProfile(
   id: cloudflarePlainDefaultDnsProfileId,
   name: 'Cloudflare DNS',
-  type: DnsProfileType.plain,
   server: '1.1.1.1',
   secondaryServer: '1.0.0.1',
-  dotHostname: '',
   timeoutMs: 1500,
   retryCount: 2,
   enabled: false,
@@ -434,10 +433,8 @@ const DnsProfile _cloudflarePlainDefaultDnsProfile = DnsProfile(
 const DnsProfile _googlePlainDefaultDnsProfile = DnsProfile(
   id: googlePlainDefaultDnsProfileId,
   name: 'Google DNS',
-  type: DnsProfileType.plain,
   server: '8.8.8.8',
   secondaryServer: '8.8.4.4',
-  dotHostname: '',
   timeoutMs: 1500,
   retryCount: 2,
   enabled: false,
@@ -446,10 +443,8 @@ const DnsProfile _googlePlainDefaultDnsProfile = DnsProfile(
 const DnsProfile _dns114PlainDefaultDnsProfile = DnsProfile(
   id: dns114PlainDefaultDnsProfileId,
   name: '114 DNS',
-  type: DnsProfileType.plain,
   server: '114.114.114.114',
   secondaryServer: '114.114.115.115',
-  dotHostname: '',
   timeoutMs: 1500,
   retryCount: 2,
   enabled: false,

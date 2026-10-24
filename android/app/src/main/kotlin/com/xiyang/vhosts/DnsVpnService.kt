@@ -11,7 +11,6 @@ import android.util.Log
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.InetAddress
-import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import org.json.JSONArray
@@ -66,7 +65,6 @@ class DnsVpnService : VpnService() {
                     hostRules = rules,
                     network = network,
                     protect = { protect(it) },
-                    protectTcp = { protect(it) },
                 )
                 vpnInterface = Builder()
                     .setSession("vhosts DNS")
@@ -125,11 +123,10 @@ class DnsVpnService : VpnService() {
         val destination = packet.copyOfRange(16, 20)
         if (!destination.contentEquals(InetAddress.getByName(DNS_ADDRESS).address)) return null
         val source = packet.copyOfRange(12, 16)
-        val sourcePort = u16(packet, ihl)
-        val destinationPort = u16(packet, ihl + 2)
+        val sourcePort = u16At(packet, ihl)
+        val destinationPort = u16At(packet, ihl + 2)
         if (destinationPort != 53) return null
-        val dnsStart = ihl + 8
-        val dnsQuery = packet.copyOfRange(dnsStart, length)
+        val dnsQuery = udpPayload(packet, ihl, length) ?: return null
         val dnsResponse = try {
             transport.resolve(dnsQuery)
         } catch (error: Exception) {
@@ -145,15 +142,39 @@ class DnsVpnService : VpnService() {
         )
     }
 
+    private fun udpPayload(packet: ByteArray, udpOffset: Int, packetLength: Int): ByteArray? {
+        val udpLength = u16At(packet, udpOffset + 4)
+        if (udpLength < 8 || udpOffset + udpLength > packetLength) return null
+        return packet.copyOfRange(udpOffset + 8, udpOffset + udpLength)
+    }
+
+    /** 跳过 IPv6 扩展头链，返回 UDP 头偏移；链太长或含分片包（UDP 头不在此包内）时返回 null。 */
+    private fun ipv6UdpOffset(packet: ByteArray, length: Int): Int? {
+        var nextHeader = packet[6].toInt() and 0xff
+        var offset = 40
+        repeat(6) {
+            if (nextHeader == 17) return offset
+            if (nextHeader !in IPV6_EXTENSION_HEADERS || offset + 8 > length) return null
+            offset += when (nextHeader) {
+                44 -> 8
+                51 -> ((packet[offset + 1].toInt() and 0xff) * 4) + 8
+                else -> ((packet[offset + 1].toInt() and 0xff) * 8) + 8
+            }
+            nextHeader = packet[offset - 1].toInt() and 0xff
+        }
+        return null
+    }
+
     private fun handleIpv6Packet(packet: ByteArray, length: Int, transport: DnsTransport): ByteArray? {
-        if (length < 48 || packet[6].toInt() and 0xff != 17) return null
+        if (length < 48) return null
+        val udpOffset = ipv6UdpOffset(packet, length) ?: return null
         val destination = packet.copyOfRange(24, 40)
         if (!destination.contentEquals(InetAddress.getByName(DNS_IPV6_ADDRESS).address)) return null
         val source = packet.copyOfRange(8, 24)
-        val sourcePort = u16(packet, 40)
-        val destinationPort = u16(packet, 42)
+        val sourcePort = u16At(packet, udpOffset)
+        val destinationPort = u16At(packet, udpOffset + 2)
         if (destinationPort != 53) return null
-        val dnsQuery = packet.copyOfRange(48, length)
+        val dnsQuery = udpPayload(packet, udpOffset, length) ?: return null
         val dnsResponse = try {
             transport.resolve(dnsQuery)
         } catch (error: Exception) {
@@ -201,11 +222,11 @@ class DnsVpnService : VpnService() {
 
     private fun udpChecksum(packet: ByteArray, udpOffset: Int, udpLength: Int): Int {
         var sum = 0L
-        for (index in 12 until 20 step 2) sum += u16(packet, index).toLong()
+        for (index in 12 until 20 step 2) sum += u16At(packet, index).toLong()
         sum += 17
         sum += udpLength
         for (index in udpOffset until udpOffset + udpLength step 2) {
-            sum += if (index + 1 < packet.size) u16(packet, index) else (packet[index].toInt() and 0xff) shl 8
+            sum += if (index + 1 < packet.size) u16At(packet, index) else (packet[index].toInt() and 0xff) shl 8
         }
         return foldChecksum(sum)
     }
@@ -237,12 +258,12 @@ class DnsVpnService : VpnService() {
 
     private fun ipv6UdpChecksum(packet: ByteArray, udpLength: Int): Int {
         var sum = 0L
-        for (index in 8 until 40 step 2) sum += u16(packet, index).toLong()
+        for (index in 8 until 40 step 2) sum += u16At(packet, index).toLong()
         sum += (udpLength ushr 16).toLong()
         sum += (udpLength and 0xffff).toLong()
         sum += 17
         for (index in 40 until 40 + udpLength step 2) {
-            sum += if (index + 1 < packet.size) u16(packet, index) else {
+            sum += if (index + 1 < packet.size) u16At(packet, index) else {
                 (packet[index].toInt() and 0xff) shl 8
             }
         }
@@ -251,7 +272,7 @@ class DnsVpnService : VpnService() {
 
     private fun checksum(packet: ByteArray, offset: Int, length: Int): Int {
         var sum = 0L
-        for (index in offset until offset + length step 2) sum += u16(packet, index).toLong()
+        for (index in offset until offset + length step 2) sum += u16At(packet, index).toLong()
         return foldChecksum(sum)
     }
 
@@ -261,7 +282,7 @@ class DnsVpnService : VpnService() {
         return sum.inv().toInt() and 0xffff
     }
 
-    private fun u16(data: ByteArray, offset: Int): Int =
+    private fun u16At(data: ByteArray, offset: Int): Int =
         ((data[offset].toInt() and 0xff) shl 8) or (data[offset + 1].toInt() and 0xff)
 
     private fun putU16(data: ByteArray, offset: Int, value: Int) {
@@ -347,5 +368,8 @@ class DnsVpnService : VpnService() {
         private const val DNS_ADDRESS = "10.0.0.1"
         private const val VPN_IPV6_ADDRESS = "fd00:7654:6e73::2"
         private const val DNS_IPV6_ADDRESS = "fd00:7654:6e73::1"
+
+        /** Hop-by-Hop、Routing、Fragment、AH、Destination Options。 */
+        private val IPV6_EXTENSION_HEADERS = setOf(0, 43, 44, 51, 60)
     }
 }

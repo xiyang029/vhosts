@@ -149,10 +149,10 @@ class _DnsProfileCard extends StatelessWidget {
             children: [
               Expanded(
                 child: _IconHeader(
-                  icon: profile.type.icon,
+                  icon: LucideIcons.globe,
                   color: theme.colorScheme.primary,
                   title: profile.name,
-                  subtitle: profile.type.label,
+                  subtitle: 'Plain DNS',
                   iconSize: 42,
                   iconRadius: 14,
                 ),
@@ -167,14 +167,7 @@ class _DnsProfileCard extends StatelessWidget {
             style: theme.textTheme.muted,
           ),
           const SizedBox(height: 10),
-          if (profile.type == DnsProfileType.dot &&
-              profile.dotHostname.isNotEmpty)
-            Text(
-              'TLS 主机名：${profile.dotHostname}',
-              style: theme.textTheme.muted,
-            ),
-          if (profile.type == DnsProfileType.plain &&
-              profile.secondaryServer.isNotEmpty)
+          if (profile.secondaryServer.isNotEmpty)
             Text(
               '备用服务器：${profile.secondaryServer}',
               style: theme.textTheme.muted,
@@ -232,10 +225,8 @@ class _ProfileEditorSheetState extends State<_ProfileEditorSheet> {
   late final TextEditingController _nameController;
   late final TextEditingController _serverController;
   late final TextEditingController _secondaryController;
-  late final TextEditingController _dotController;
   late final TextEditingController _timeoutController;
   late final TextEditingController _retryController;
-  late DnsProfileType _type;
   late bool _enabled;
 
   @override
@@ -248,16 +239,12 @@ class _ProfileEditorSheetState extends State<_ProfileEditorSheet> {
     _secondaryController = TextEditingController(
       text: widget.existing?.secondaryServer ?? '',
     );
-    _dotController = TextEditingController(
-      text: widget.existing?.dotHostname ?? '',
-    );
     _timeoutController = TextEditingController(
       text: (widget.existing?.timeoutMs ?? 1500).toString(),
     );
     _retryController = TextEditingController(
       text: (widget.existing?.retryCount ?? 2).toString(),
     );
-    _type = widget.existing?.type ?? DnsProfileType.doh;
     _enabled = widget.existing?.enabled ?? true;
   }
 
@@ -266,7 +253,6 @@ class _ProfileEditorSheetState extends State<_ProfileEditorSheet> {
     _nameController.dispose();
     _serverController.dispose();
     _secondaryController.dispose();
-    _dotController.dispose();
     _timeoutController.dispose();
     _retryController.dispose();
     super.dispose();
@@ -284,33 +270,6 @@ class _ProfileEditorSheetState extends State<_ProfileEditorSheet> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('协议类型'),
-                const SizedBox(height: 6),
-                ShadSelect<DnsProfileType>(
-                  minWidth: double.infinity,
-                  initialValue: _type,
-                  placeholder: const Text('协议类型'),
-                  options: _editableDnsProfileTypes
-                      .map(
-                        (type) =>
-                            ShadOption(value: type, child: Text(type.label)),
-                      )
-                      .toList(),
-                  selectedOptionBuilder: (context, selected) {
-                    return Text(selected.label);
-                  },
-                  onChanged: (selected) {
-                    if (selected != null) {
-                      setState(() => _type = selected);
-                    }
-                  },
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
             LabeledField(
               label: '配置名称',
               child: ShadInput(
@@ -320,31 +279,20 @@ class _ProfileEditorSheetState extends State<_ProfileEditorSheet> {
             ),
             const SizedBox(height: 12),
             LabeledField(
-              label: _serverLabelText(_type),
+              label: '主服务器',
               child: ShadInput(
                 controller: _serverController,
-                placeholder: Text(_serverHintText(_type)),
+                placeholder: const Text('例如 223.5.5.5（默认端口 53）'),
               ),
             ),
-            if (_type == DnsProfileType.plain) ...[
-              const SizedBox(height: 12),
-              LabeledField(
-                label: '备用服务器',
-                child: ShadInput(
-                  controller: _secondaryController,
-                  placeholder: const Text('可选，例如 223.6.6.6（默认端口 53）'),
-                ),
+            const SizedBox(height: 12),
+            LabeledField(
+              label: '备用服务器',
+              child: ShadInput(
+                controller: _secondaryController,
+                placeholder: const Text('可选，例如 223.6.6.6（默认端口 53）'),
               ),
-            ] else if (_type == DnsProfileType.dot) ...[
-              const SizedBox(height: 12),
-              LabeledField(
-                label: 'TLS 主机名',
-                child: ShadInput(
-                  controller: _dotController,
-                  placeholder: const Text('例如 cloudflare-dns.com'),
-                ),
-              ),
-            ],
+            ),
             const SizedBox(height: 12),
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
@@ -399,7 +347,6 @@ class _ProfileEditorSheetState extends State<_ProfileEditorSheet> {
     final name = _nameController.text.trim();
     final server = _serverController.text.trim();
     final secondary = _secondaryController.text.trim();
-    final dotHostname = _dotController.text.trim();
 
     if (name.isEmpty) {
       showVhostsToast(context, '请先填写配置名称');
@@ -409,19 +356,12 @@ class _ProfileEditorSheetState extends State<_ProfileEditorSheet> {
       showVhostsToast(context, '配置名称请控制在 32 个字符以内');
       return;
     }
-    if (!_isValidServerForType(server, _type)) {
-      showVhostsToast(context, '服务器地址格式与当前协议不匹配');
+    if (!hasUriHost(server, scheme: 'dns')) {
+      showVhostsToast(context, '服务器地址格式不正确');
       return;
     }
-    if (_type == DnsProfileType.plain &&
-        secondary.isNotEmpty &&
-        !hasUriHost(secondary, scheme: 'dns')) {
-      showVhostsToast(context, '备用服务器仅支持 Plain DNS，且格式必须正确');
-      return;
-    }
-    if (_type == DnsProfileType.dot &&
-        !hasUriHost(dotHostname, scheme: 'dot')) {
-      showVhostsToast(context, 'DoT 需要有效的主机名用于 TLS 校验');
+    if (secondary.isNotEmpty && !hasUriHost(secondary, scheme: 'dns')) {
+      showVhostsToast(context, '备用服务器格式必须正确');
       return;
     }
 
@@ -441,10 +381,8 @@ class _ProfileEditorSheetState extends State<_ProfileEditorSheet> {
       DnsProfile(
         id: widget.existing?.id ?? 'dp_${now.millisecondsSinceEpoch}',
         name: name,
-        type: _type,
         server: server,
-        secondaryServer: _type == DnsProfileType.plain ? secondary : '',
-        dotHostname: _type == DnsProfileType.dot ? dotHostname : '',
+        secondaryServer: secondary,
         timeoutMs: timeoutMs,
         retryCount: retryCount,
         enabled: _enabled,
@@ -507,37 +445,3 @@ class _IconHeader extends StatelessWidget {
   }
 }
 
-const List<DnsProfileType> _editableDnsProfileTypes = [
-  DnsProfileType.doh,
-  DnsProfileType.plain,
-  DnsProfileType.dot,
-];
-
-bool _isValidServerForType(String value, DnsProfileType type) {
-  return switch (type) {
-    DnsProfileType.plain => hasUriHost(value, scheme: 'dns'),
-    DnsProfileType.doh => _isValidDohUrl(value),
-    DnsProfileType.dot => hasUriHost(value, scheme: 'dot'),
-  };
-}
-
-bool _isValidDohUrl(String value) {
-  final uri = Uri.tryParse(value.trim());
-  return uri != null && uri.scheme == 'https' && uri.host.isNotEmpty;
-}
-
-String _serverHintText(DnsProfileType type) {
-  return switch (type) {
-    DnsProfileType.plain => '例如 223.5.5.5（默认端口 53）',
-    DnsProfileType.doh => 'https://dns.example.com/dns-query',
-    DnsProfileType.dot => '例如 1.1.1.1（默认端口 853）',
-  };
-}
-
-String _serverLabelText(DnsProfileType type) {
-  return switch (type) {
-    DnsProfileType.plain => '主服务器',
-    DnsProfileType.doh => 'DoH URL',
-    DnsProfileType.dot => 'DoT 服务器',
-  };
-}

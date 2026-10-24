@@ -27,7 +27,7 @@ flutter build apk --debug
 3. `AppState.startVpn()` 通过 `lib/core/platform/dns_vpn_platform_service.dart` 的 `vhosts/dns` MethodChannel 传递 profile JSON 和 hosts JSON。
 4. `android/.../MainActivity.kt` 接收 MethodChannel，申请 `VpnService` 权限，并启动 `DnsVpnService`；状态通过 `vhosts/dns/events` EventChannel 回传 Flutter。
 5. `DnsVpnService` 建立 TUN 接口，仅添加本地 IPv4/IPv6 DNS 地址和对应的 `/32`、`/128` 路由，读取 UDP/53 数据包并回写 DNS 响应。
-6. `DnsTransport.resolve()` 先按 exact/suffix 规则匹配 hosts；匹配成功且查询类型与目标 IP 家族一致时直接合成响应，否则按配置访问 Plain DNS、DoH 或 DoT 上游。
+6. `DnsTransport.resolve()` 先按 exact/suffix 规则匹配 hosts；匹配成功且查询类型与目标 IP 家族一致时直接合成响应，否则用 UDP 访问 Plain DNS 上游（主服务器失败后尝试备用服务器）。
 
 ## hosts 规则约定
 
@@ -41,14 +41,15 @@ flutter build apk --debug
 
 - 已实现 IPv6 DNS 入口：VPN 配置 `fd00:7654:6e73::1/128`，并解析 IPv6 UDP/53 查询。
 - 已实现 hosts 的 AAAA 静态响应，使用 `Inet6Address` 和 DNS 类型 `28`。
-- 上游地址解析可返回 IPv6 地址，Plain DNS 使用 UDP，DoH/DoT 使用 TCP/TLS。
+- 上游地址解析可返回 IPv6 地址，Plain DNS 使用 UDP。
+- 不是所有网络都会用到 IPv6 DNS 入口：Android 只有在当前底层网络具备 IPv6 时才会使用 VPN 的 IPv6 DNS 服务器，纯 IPv4 网络下 AAAA 查询仍走 IPv4 DNS 服务器。
 - 这不是完整的 IPv6 全流量 VPN 或 IPv6 代理：当前只路由两个本地 DNS 地址，不转发普通 IPv4/IPv6 流量。
-- IPv6 包处理按固定基础头解析，只接受 `Next Header == UDP`；带 IPv6 扩展头的 DNS 包、TCP DNS、DNS 分片和普通业务流量目前不在实现范围内。
+- IPv6 包处理按固定基础头解析，并跳过 Hop-by-Hop、Routing、Fragment、AH、Destination Options 扩展头链；分片包（UDP 头不在本包内）、TCP DNS、DNS 分片和普通业务流量目前不在实现范围内。
 
 ## 修改注意事项
 
-- 保持 Dart/Kotlin 的 JSON 字段名同步，尤其是 `matchType`、`targetIp`、`secondaryServer`、`dotHostname`、`timeoutMs` 和 `retryCount`。
-- 上游 DNS socket 在 VPN 内运行时必须调用 `VpnService.protect()`，否则可能形成回环；Plain UDP 和 DoH/DoT TCP 都要保持这一约束。
+- 保持 Dart/Kotlin 的 JSON 字段名同步，尤其是 `matchType`、`targetIp`、`secondaryServer`、`timeoutMs` 和 `retryCount`。
+- 上游 DNS socket 在 VPN 内运行时必须调用 `VpnService.protect()`，否则可能形成回环；Plain UDP 路径必须保持这一约束。
 - 不要把 `addRoute()` 改成默认路由，除非同时实现完整 IP 转发，否则会丢弃非 DNS 流量。
 - 新增 DNS 包逻辑时补充 DNS 报文、A/AAAA、hosts 优先级和 IPv4/IPv6 UDP 回包校验；当前测试目录覆盖有限，不能替代设备验证。
 - 工作区可能存在用户生成的锁文件或平台生成文件变更。除非任务明确要求，不要回滚与当前任务无关的变更。

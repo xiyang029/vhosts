@@ -1,7 +1,6 @@
 package com.xiyang.vhosts
 
 import android.net.Network
-import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.DatagramPacket
@@ -9,30 +8,21 @@ import java.net.DatagramSocket
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
-import java.net.InetSocketAddress
-import java.net.Socket
-import java.net.URI
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.SecureRandom
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLSocket
 import org.json.JSONObject
 
 data class DnsProfileConfig(
-    val type: String,
     val server: String,
     val secondaryServer: String,
-    val dotHostname: String,
     val timeoutMs: Int,
     val retryCount: Int,
 ) {
     companion object {
         fun fromJson(json: JSONObject): DnsProfileConfig = DnsProfileConfig(
-            type = json.getString("type"),
             server = json.getString("server"),
             secondaryServer = json.getString("secondaryServer"),
-            dotHostname = json.getString("dotHostname"),
             timeoutMs = json.getInt("timeoutMs"),
             retryCount = json.getInt("retryCount"),
         )
@@ -78,7 +68,6 @@ class DnsTransport(
     private val hostRules: List<HostRuleConfig> = emptyList(),
     private val network: Network? = null,
     private val protect: ((DatagramSocket) -> Boolean)? = null,
-    private val protectTcp: ((Socket) -> Boolean)? = null,
 ) {
     private val random = SecureRandom()
 
@@ -103,14 +92,12 @@ class DnsTransport(
         var lastError: Exception? = null
         val servers = buildList {
             add(profile.server)
-            if (profile.type == "plain" && profile.secondaryServer.isNotBlank()) {
-                add(profile.secondaryServer)
-            }
+            if (profile.secondaryServer.isNotBlank()) add(profile.secondaryServer)
         }
         repeat(profile.retryCount.coerceIn(1, 5)) {
             for (server in servers) {
                 try {
-                    return request(server, query)
+                    return requestPlain(server, query)
                 } catch (error: Exception) {
                     lastError = error
                 }
@@ -136,17 +123,8 @@ class DnsTransport(
         }
     }
 
-    private fun request(server: String, query: ByteArray): ByteArray {
-        return when (profile.type) {
-            "plain" -> requestPlain(server, query)
-            "doh" -> requestDoh(server, query)
-            "dot" -> requestDot(server, query)
-            else -> throw IOException("不支持的 DNS 类型")
-        }
-    }
-
     private fun requestPlain(server: String, query: ByteArray): ByteArray {
-        val endpoint = parseEndpoint(server, 53)
+        val endpoint = parseEndpoint(server)
         val addresses = resolveAddresses(endpoint.host)
         var lastError: Exception? = null
         for (address in addresses) {
@@ -170,168 +148,13 @@ class DnsTransport(
         throw IOException(lastError?.message ?: "无法连接 Plain DNS 服务器")
     }
 
-    private fun requestDot(server: String, query: ByteArray): ByteArray {
-        val endpoint = parseEndpoint(server, 853)
-        val hostname = profile.dotHostname.ifBlank { endpoint.host }
-        return withTlsSocket(endpoint.host, endpoint.port, hostname) { socket ->
-            val payload = ByteArrayOutputStream().apply {
-                write(query.size ushr 8)
-                write(query.size and 0xff)
-                write(query)
-            }.toByteArray()
-            socket.outputStream.write(payload)
-            socket.outputStream.flush()
-            val length = readU16(socket.inputStream)
-            if (length <= 0 || length > 65535) throw IOException("DoT 响应长度无效")
-            readExact(socket.inputStream, length)
-        }
-    }
-
-    private fun requestDoh(server: String, query: ByteArray): ByteArray {
-        val uri = URI(server)
-        val dohHost = uri.host
-        if (uri.scheme.lowercase() != "https" || dohHost.isNullOrBlank()) {
-            throw IOException("DoH URL 必须是有效的 https 地址")
-        }
-        val port = if (uri.port > 0) uri.port else 443
-        val endpoint = resolveAddresses(dohHost)
-        var lastError: Exception? = null
-        for (address in endpoint) {
-            try {
-                return withTlsSocket(address.hostAddress ?: throw IOException("DoH 地址无效"), port, dohHost) { socket ->
-                    val path = (uri.rawPath?.takeIf { it.isNotBlank() } ?: "/dns-query") +
-                        (uri.rawQuery?.let { "?$it" } ?: "")
-                    val hostHeader = if (uri.port > 0) "$dohHost:$port" else dohHost
-                    val request = buildString {
-                        append("POST $path HTTP/1.1\r\n")
-                        append("Host: $hostHeader\r\n")
-                        append("Content-Type: application/dns-message\r\n")
-                        append("Accept: application/dns-message\r\n")
-                        append("Content-Length: ${query.size}\r\n")
-                        append("Connection: close\r\n\r\n")
-                    }.toByteArray(Charsets.US_ASCII)
-                    socket.outputStream.write(request)
-                    socket.outputStream.write(query)
-                    socket.outputStream.flush()
-                    readHttpDnsResponse(socket)
-                }
-            } catch (error: Exception) {
-                lastError = error
-            }
-        }
-        throw IOException(lastError?.message ?: "无法连接 DoH 服务器")
-    }
-
-    private fun <T> withTlsSocket(
-        host: String,
-        port: Int,
-        serverName: String,
-        block: (SSLSocket) -> T,
-    ): T {
-        val tcp = Socket()
-        try {
-            if (protectTcp != null && !protectTcp.invoke(tcp)) {
-                throw IOException("无法保护上游 TCP 套接字")
-            }
-            tcp.connect(InetSocketAddress(resolveAddresses(host).first(), port), profile.timeoutMs)
-            tcp.soTimeout = profile.timeoutMs.coerceIn(300, 10000)
-            val ssl = SSLContext.getDefault().socketFactory.createSocket(
-                tcp,
-                serverName,
-                port,
-                true,
-            ) as SSLSocket
-            ssl.soTimeout = profile.timeoutMs.coerceIn(300, 10000)
-            ssl.sslParameters = ssl.sslParameters.apply {
-                endpointIdentificationAlgorithm = "HTTPS"
-            }
-            ssl.useClientMode = true
-            ssl.startHandshake()
-            return ssl.use(block)
-        } finally {
-            try {
-                tcp.close()
-            } catch (_: Exception) {
-            }
-        }
-    }
-
-    private fun readHttpDnsResponse(socket: SSLSocket): ByteArray {
-        val input = BufferedInputStream(socket.inputStream)
-        val headerBytes = ByteArrayOutputStream()
-        var previous = -1
-        var current: Int
-        while (true) {
-            current = input.read()
-            if (current < 0) throw IOException("DoH 响应头不完整")
-            headerBytes.write(current)
-            if (previous == '\r'.code && current == '\n'.code && headerBytes.toString(Charsets.US_ASCII.name()).endsWith("\r\n\r\n")) {
-                break
-            }
-            previous = current
-            if (headerBytes.size() > 16384) throw IOException("DoH 响应头过大")
-        }
-        val headers = headerBytes.toString(Charsets.US_ASCII.name()).split("\r\n")
-        val status = headers.firstOrNull()?.split(" ")?.getOrNull(1)?.toIntOrNull() ?: 0
-        if (status !in 200..299) throw IOException("DoH HTTP 状态码 $status")
-        val contentLength = headers.firstNotNullOfOrNull {
-            if (it.lowercase().startsWith("content-length:")) it.substringAfter(':').trim().toIntOrNull() else null
-        }
-        val isChunked = headers.any { it.lowercase().startsWith("transfer-encoding:") && it.lowercase().contains("chunked") }
-        val body = if (isChunked) {
-            readChunkedBody(input)
-        } else if (contentLength != null) {
-            readExact(input, contentLength)
-        } else {
-            val output = ByteArrayOutputStream()
-            val buffer = ByteArray(4096)
-            var count: Int
-            while (input.read(buffer).also { count = it } >= 0) output.write(buffer, 0, count)
-            output.toByteArray()
-        }
-        if (body.isEmpty()) throw IOException("DoH 返回空响应")
-        return body
-    }
-
-    private fun readChunkedBody(input: BufferedInputStream): ByteArray {
-        val output = ByteArrayOutputStream()
-        while (true) {
-            val line = readHttpLine(input)
-            val size = line.substringBefore(';').trim().toIntOrNull(16)
-                ?: throw IOException("DoH chunk 长度无效")
-            if (size == 0) {
-                readHttpLine(input)
-                return output.toByteArray()
-            }
-            output.write(readExact(input, size))
-            if (input.read() != '\r'.code || input.read() != '\n'.code) {
-                throw IOException("DoH chunk 分隔符无效")
-            }
-        }
-    }
-
-    private fun readHttpLine(input: BufferedInputStream): String {
-        val output = ByteArrayOutputStream()
-        var previous = -1
-        while (true) {
-            val current = input.read()
-            if (current < 0) throw IOException("DoH 响应行不完整")
-            if (previous == '\r'.code && current == '\n'.code) {
-                val bytes = output.toByteArray()
-                return String(bytes, 0, bytes.size - 1, Charsets.US_ASCII)
-            }
-            output.write(current)
-            previous = current
-        }
-    }
-
     private fun resolveAddresses(host: String): Array<InetAddress> {
         val literal = try { InetAddress.getByName(host) } catch (_: Exception) { null }
         if (literal != null && literal.hostAddress == host.trim('[', ']')) return arrayOf(literal)
         return network?.getAllByName(host) ?: InetAddress.getAllByName(host)
     }
 
-    private fun parseEndpoint(value: String, defaultPort: Int): Endpoint {
+    private fun parseEndpoint(value: String): Endpoint {
         var input = value.trim()
         if (input.startsWith("dns://")) input = input.substring(6)
         if (input.startsWith("[")) {
@@ -339,7 +162,7 @@ class DnsTransport(
             if (end > 0) {
                 val portText = input.substring(end + 1).removePrefix(":")
                 val port = if (portText.isEmpty()) {
-                    defaultPort
+                    DEFAULT_PORT
                 } else {
                     portText.toIntOrNull()?.also(::checkPort)
                         ?: throw IOException("端口必须是 1 到 65535 的数字")
@@ -358,7 +181,7 @@ class DnsTransport(
                     ?: throw IOException("端口必须是 1 到 65535 的数字"),
             )
         } else {
-            Endpoint(input, defaultPort)
+            Endpoint(input, DEFAULT_PORT)
         }
     }
 
@@ -368,14 +191,18 @@ class DnsTransport(
 
     private fun readableError(error: Exception): String {
         val message = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
-        return when {
-            message.contains("timed out", true) -> "请求超时，请检查网络或服务器端口"
-            message.contains("CERT", true) || message.contains("SSL", true) -> "TLS 校验失败：$message"
-            else -> message
+        return if (message.contains("timed out", true)) {
+            "请求超时，请检查网络或服务器端口"
+        } else {
+            message
         }
     }
 
     private data class Endpoint(val host: String, val port: Int)
+
+    companion object {
+        private const val DEFAULT_PORT = 53
+    }
 }
 
 object DnsPacket {
@@ -508,22 +335,4 @@ object DnsPacket {
 
     private fun u16(data: ByteArray, offset: Int): Int =
         ((data[offset].toInt() and 0xff) shl 8) or (data[offset + 1].toInt() and 0xff)
-}
-
-fun readExact(input: java.io.InputStream, length: Int): ByteArray {
-    val result = ByteArray(length)
-    var offset = 0
-    while (offset < length) {
-        val count = input.read(result, offset, length - offset)
-        if (count < 0) throw IOException("DNS 响应提前结束")
-        offset += count
-    }
-    return result
-}
-
-fun readU16(input: java.io.InputStream): Int {
-    val first = input.read()
-    val second = input.read()
-    if (first < 0 || second < 0) throw IOException("DNS 长度字段不完整")
-    return (first shl 8) or second
 }
